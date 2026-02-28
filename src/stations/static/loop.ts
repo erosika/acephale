@@ -196,6 +196,40 @@ export async function runStaticLoop(): Promise<never> {
 
   while (true) {
     try {
+      // 1. Process any calls in queue (using static/request-line fallback)
+      let callWaitMs = 0;
+      let handledCall = false;
+      const call = (await import("../../core/calls.js")).pickNextCall("request-line") || 
+                   (await import("../../core/calls.js")).pickNextCall("static");
+      
+      if (call) {
+        console.log(`[static] Handling call: ${call.id}`);
+        try {
+          const processed = await (await import("../../core/calls.js")).processCallWithLyriaUnderbed(call);
+          
+          await queueTrack("static", processed.mp3Path, {
+            title: "Haunted Voicemail",
+            artist: "Anonymous",
+            album: "The Generator",
+          });
+          
+          setNowPlaying("request-line", {
+            title: "Haunted Voicemail",
+            artist: "Anonymous",
+          });
+          
+          callWaitMs = processed.durationMs + 2000;
+          handledCall = true;
+        } catch (err) {
+          console.error(`[static] Failed to process call ${call.id}:`, err);
+        }
+      }
+
+      if (handledCall) {
+        console.log(`[static] Waiting ~${Math.round(callWaitMs / 1000)}s for call to finish playing...`);
+        await Bun.sleep(callWaitMs);
+      }
+
       const waitMs = await runGeneratorCycle(agent, schedule);
       
       cycleCount++;
