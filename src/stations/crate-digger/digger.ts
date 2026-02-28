@@ -45,7 +45,12 @@ export type DiggerState = {
 // - React to cross-channel events (Morning Zoo pranks)
 // - Build running commentary about music history
 
-export function buildDiggerPrompt(agent: AgentConfig, track: RadioooooTrack, memories: string[]): string {
+export function buildDiggerPrompt(
+  agent: AgentConfig, 
+  track: RadioooooTrack, 
+  memories: string[],
+  callContext?: string
+): string {
   return `You are ${agent.name}, an obsessive music nerd DJ on Acephale Radio.
 Personality: ${agent.personality}
 
@@ -54,10 +59,12 @@ Label: ${track.label || "unknown"}
 
 ${memories.length > 0 ? `Your memories:\n${memories.map(m => `- ${m}`).join("\n")}` : ""}
 
+${callContext ? `A listener just called in and said: "${callContext}"\nYou MUST respond to their call directly before or during your introduction of the track. If their taste is mainstream or basic, be offended or scholarly.` : ""}
+
 Write a brief (2-3 sentence) introduction for this track. Include:
 - Something about the artist, label, or recording context
 - Why this track matters or what makes it special
-- A smooth transition from whatever was playing before
+- A smooth transition from whatever was playing before (or a response to the caller)
 
 Stay in character: reverent about music, annoyed by mainstream taste, deeply knowledgeable.`;
 }

@@ -5,7 +5,7 @@ import { getEnv } from "../../core/config.js";
 // --- Types ---
 
 export type ContentSource = {
-  type: "rss" | "hn" | "manual" | "prank" | "caller_recap";
+  type: "rss" | "hn" | "manual" | "prank" | "caller_recap" | "listener_call";
   title: string;
   summary: string;
   url?: string;

@@ -8,11 +8,13 @@ import { loadAgentRoster, getStationAgents } from "../../core/config.js";
 import { getGeminiPro, generateStructured } from "../../core/gemini.js";
 import { getAgentMemory, saveMonologue } from "../../core/honcho.js";
 import { synthesizeSpeech } from "../../core/tts.js";
-import { concatAudio, normalizeAudio, convertToMp3, type AudioSegment } from "../../core/audio.js";
+import { concatAudio, normalizeAudio, convertToMp3, type AudioSegment, mixVoiceOverMusic } from "../../core/audio.js";
 import { queueTrack } from "../../core/stream.js";
 import { setNowPlaying } from "../../core/nowplaying.js";
 import { logArchiveEntry } from "../../core/archive.js";
 import { buildConspiracyPrompt, type ConspiracyThread, type Evidence } from "./host.js";
+import { pickNextCall, processCallVoice } from "../../core/calls.js";
+import { generateLyriaAmbient } from "../../core/lyria.js";
 
 // --- Types ---
 
@@ -98,14 +100,14 @@ function parseMonologue(raw: string): MonologueResult {
   };
 }
 
-async function generateMonologue(memories: string[]): Promise<MonologueResult> {
+async function generateMonologue(memories: string[], callContext?: string): Promise<MonologueResult> {
   const roster = loadAgentRoster();
   const agents = getStationAgents(roster, "conspiracy-hour");
   const agent = agents[0];
   if (!agent) throw new Error("No Conspiracy Hour agent in roster");
 
   const evidence = gatherAmbientEvidence();
-  const prompt = buildConspiracyPrompt(agent, activeThreads, evidence, memories);
+  const prompt = buildConspiracyPrompt(agent, activeThreads, evidence, memories, callContext);
   const model = getGeminiPro();
 
   return generateStructured(model, prompt, parseMonologue);
@@ -196,6 +198,19 @@ export async function runConspiracyLoop(): Promise<never> {
 
   while (true) {
     try {
+      // 0. Check for calls
+      const call = pickNextCall("conspiracy-hour");
+      
+      if (call) {
+        console.log(`[conspiracy-hour] Processing call from ${call.type === 'user_voice' ? 'real user' : 'AI'}...`);
+        try {
+          const { saveCall } = await import("../../core/honcho.js");
+          await saveCall("conspiracy-hour", call.id, call.text);
+        } catch (err) {
+          console.error(`[conspiracy-hour] Failed to save call to Honcho:`, err);
+        }
+      }
+
       // 1. Fetch memories (contextual: what threads am I tracking?)
       let memories: string[] = [];
       try {
@@ -211,8 +226,9 @@ export async function runConspiracyLoop(): Promise<never> {
       }
 
       // 2. Generate monologue
+      const callContext = call ? call.text : undefined;
       console.log(`[conspiracy-hour] Generating monologue (paranoia: ${paranoiaLevel.toFixed(1)}, threads: ${activeThreads.length})`);
-      const result = await generateMonologue(memories);
+      const result = await generateMonologue(memories, callContext);
       console.log(`[conspiracy-hour] Monologue: "${result.monologue.slice(0, 60)}..." [${result.mood}]`);
 
       if (result.accusations.length > 0) {
@@ -228,15 +244,52 @@ export async function runConspiracyLoop(): Promise<never> {
       const rendered = await renderMonologue(result.monologue, agent.voice, result.mood);
       console.log(`[conspiracy-hour] Rendered (~${Math.round(rendered.durationMs / 1000)}s)`);
 
-      // 5. Queue in Liquidsoap
-      await queueTrack("conspiracy-hour", rendered.mp3Path, {
+      // 5. Process Caller voice (if any)
+      let callerVoice: { wavPath: string; durationMs: number } | null = null;
+      if (call) {
+        callerVoice = await processCallVoice(call);
+      }
+
+      // 6. Generate a dark ambient underbed for the conspiracy hour using Lyria
+      const speechTotalMs = (callerVoice ? callerVoice.durationMs + 1000 : 0) + rendered.durationMs;
+      const trackLengthSec = Math.max(60, Math.ceil(speechTotalMs / 1000) + 15); 
+      console.log(`[conspiracy-hour] Generating ${trackLengthSec}s ambient underbed...`);
+      const lyria = await generateLyriaAmbient("dark ambient, tense, ethereal, low drone", trackLengthSec);
+
+      // Mix voices over track intro
+      const tmpDir = join(import.meta.dir, "..", "..", "..", ".tmp");
+      const finalMp3 = join(tmpDir, `conspiracy-final-${Date.now()}.mp3`);
+      
+      const voicesToMix: { path: string; delayMs?: number }[] = [];
+      let currentDelay = 2000; // Let music play for 2s first
+      
+      if (callerVoice) {
+        voicesToMix.push({ path: callerVoice.wavPath, delayMs: currentDelay });
+        currentDelay = 1500; // Gap between caller and DJ
+      }
+      
+      voicesToMix.push({ path: rendered.mp3Path.replace(".mp3", ".wav"), delayMs: currentDelay });
+
+      console.log(`[conspiracy-hour] Mixing voices over ambient track...`);
+      await mixVoiceOverMusic(voicesToMix, lyria.mp3Path, finalMp3, {
         title: `Conspiracy Hour -- ${result.mood}`,
         artist: agent.name,
         comment: activeThreads.length > 0 ? activeThreads[activeThreads.length - 1].thesis : undefined,
       });
+
+      // Cleanup temps
+      const { unlinkSync } = await import("node:fs");
+      try { unlinkSync(lyria.mp3Path); } catch {}
+      try { unlinkSync(rendered.mp3Path); } catch {}
+      if (callerVoice) {
+        try { unlinkSync(callerVoice.wavPath); } catch {}
+      }
+
+      // 7. Queue in Liquidsoap
+      await queueTrack("conspiracy-hour", finalMp3);
       console.log("[conspiracy-hour] Queued monologue");
 
-      // 6. Update now-playing
+      // 8. Update now-playing
       const latestThread = activeThreads[activeThreads.length - 1];
       setNowPlaying("conspiracy-hour", {
         title: latestThread ? latestThread.thesis.slice(0, 60) : "The truth is out there...",
@@ -244,16 +297,16 @@ export async function runConspiracyLoop(): Promise<never> {
         album: `Paranoia Level ${Math.round(paranoiaLevel)}`,
       });
 
-      // 7. Log to archive
+      // 9. Log to archive
       logArchiveEntry({
         station: "conspiracy-hour",
         timestamp: Date.now(),
         title: latestThread ? latestThread.thesis : "Monologue",
         artist: agent.name,
-        duration: Math.round(rendered.durationMs / 1000),
+        duration: Math.round(lyria.durationMs / 1000),
       });
 
-      // 8. Save to Honcho (shift session -- monologues accumulate through the night)
+      // 10. Save to Honcho (shift session -- monologues accumulate through the night)
       try {
         await saveMonologue(agent.honchoUser, result.monologue, {
           mood: result.mood,
@@ -268,10 +321,10 @@ export async function runConspiracyLoop(): Promise<never> {
       monologueCount++;
       console.log(`[conspiracy-hour] Monologue #${monologueCount} complete`);
 
-      // 9. Wait -- start preparing next monologue before current ends (no dead air)
-      // Talk-only station: chain monologues back-to-back, prep next while current plays
-      const prepLeadMs = Math.min(30000, rendered.durationMs * 0.3);
-      const waitMs = Math.max(5000, rendered.durationMs - prepLeadMs);
+      // 11. Wait -- start preparing next monologue before current ends (no dead air)
+      const totalMs = lyria.durationMs;
+      const prepLeadMs = Math.min(30000, totalMs * 0.4);
+      const waitMs = Math.max(5000, totalMs - prepLeadMs);
       console.log(`[conspiracy-hour] Monologue #${monologueCount}. Next prep in ~${Math.round(waitMs / 1000)}s`);
       await Bun.sleep(waitMs);
 

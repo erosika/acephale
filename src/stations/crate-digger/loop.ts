@@ -8,11 +8,12 @@ import { loadAgentRoster, getStationAgents } from "../../core/config.js";
 import { getGeminiFlash, generateStructured } from "../../core/gemini.js";
 import { getAgentMemory, saveDig } from "../../core/honcho.js";
 import { synthesizeSpeech } from "../../core/tts.js";
-import { concatAudio, normalizeAudio, convertToMp3, applyFades, type AudioSegment } from "../../core/audio.js";
+import { concatAudio, normalizeAudio, convertToMp3, applyFades, mixVoiceOverMusic, type AudioSegment } from "../../core/audio.js";
 import { randomTrack, downloadAndTagTrack, countriesForDecade, type RadioooooTrack, type Decade, type Mood, ALL_DECADES, ALL_MOODS } from "../../core/radiooooo.js";
 import { queueTrack } from "../../core/stream.js";
 import { setNowPlaying } from "../../core/nowplaying.js";
 import { logArchiveEntry } from "../../core/archive.js";
+import { pickNextCall, processCallVoice, type CallRequest } from "../../core/calls.js";
 import { buildDiggerPrompt, type TrackIntroduction } from "./digger.js";
 
 // --- Types ---
@@ -77,14 +78,15 @@ function parseIntroduction(raw: string): TrackIntroduction {
 
 async function generateCommentary(
   track: RadioooooTrack,
-  memories: string[]
+  memories: string[],
+  callContext?: string
 ): Promise<{ text: string; emotion: string }> {
   const roster = loadAgentRoster();
   const agents = getStationAgents(roster, "crate-digger");
   const agent = agents[0];
   if (!agent) throw new Error("No Crate Digger agent in roster");
 
-  const prompt = buildDiggerPrompt(agent, track, memories);
+  const prompt = buildDiggerPrompt(agent, track, memories, callContext);
   const model = getGeminiFlash();
 
   const result = await generateStructured(model, prompt + `
@@ -138,6 +140,19 @@ export async function runCrateDiggerLoop(): Promise<never> {
 
   while (true) {
     try {
+      // 0. Check for calls
+      const call = pickNextCall("crate-digger");
+      
+      if (call) {
+        console.log(`[crate-digger] Processing call from ${call.type === 'user_voice' ? 'real user' : 'AI'}...`);
+        try {
+          const { saveCall } = await import("../../core/honcho.js");
+          await saveCall("crate-digger", call.id, call.text);
+        } catch (err) {
+          console.error(`[crate-digger] Failed to save call to Honcho:`, err);
+        }
+      }
+
       // 1. Pick parameters
       const decade = pickWeightedDecade();
       const mood = pickMood();
@@ -165,33 +180,58 @@ export async function runCrateDiggerLoop(): Promise<never> {
       }
 
       // 4. Generate commentary
-      const commentary = await generateCommentary(track, memories);
+      const callContext = call ? call.text : undefined;
+      const commentary = await generateCommentary(track, memories, callContext);
       console.log(`[crate-digger] Commentary: "${commentary.text.slice(0, 60)}..." [${commentary.emotion}]`);
 
       // 5. Render commentary audio
       const rendered = await renderCommentary(commentary.text, agent.voice);
       console.log(`[crate-digger] Commentary rendered (~${Math.round(rendered.durationMs / 1000)}s)`);
 
-      // 6. Download and tag track
+      // 6. Process Caller voice (if any)
+      let callerVoice: { wavPath: string; durationMs: number } | null = null;
+      if (call) {
+        callerVoice = await processCallVoice(call);
+      }
+
+      // 7. Download and tag track
       const taggedPath = await downloadAndTagTrack(track, "Acephale Radio -- Crate Digger");
       console.log(`[crate-digger] Track tagged: ${taggedPath}`);
 
-      // 6b. Apply fades to track only (TTS stays clean)
-      await applyFades(taggedPath, { fadeInSec: 1.0, fadeOutSec: 2.5 });
-      console.log(`[crate-digger] Track fades applied`);
+      // Mix voices over track intro
+      const tmpDir = join(import.meta.dir, "..", "..", "..", ".tmp");
+      const finalMp3 = join(tmpDir, `crate-final-${Date.now()}.mp3`);
+      
+      const voicesToMix: { path: string; delayMs?: number }[] = [];
+      let currentDelay = 2000; // Let music play for 2s first
+      
+      if (callerVoice) {
+        voicesToMix.push({ path: callerVoice.wavPath, delayMs: currentDelay });
+        currentDelay = 1500; // Gap between caller and DJ
+      }
+      
+      voicesToMix.push({ path: rendered.mp3Path.replace(".mp3", ".wav"), delayMs: currentDelay });
 
-      // 7. Queue commentary, then track
-      const trackMeta = {
+      console.log(`[crate-digger] Mixing voices over Radiooooo track...`);
+      await mixVoiceOverMusic(voicesToMix, taggedPath, finalMp3, {
         title: track.title,
         artist: track.artist,
         album: track.album || `${track.country} ${track.decade}s`,
         year: track.year,
         genre: `${track.country} ${track.mood}`,
-      };
+      });
 
-      await queueTrack("crate-digger", rendered.mp3Path);
-      await queueTrack("crate-digger", taggedPath, trackMeta);
-      console.log("[crate-digger] Queued commentary + track");
+      // Cleanup temps
+      const { unlinkSync } = await import("node:fs");
+      try { unlinkSync(taggedPath); } catch {}
+      try { unlinkSync(rendered.mp3Path); } catch {}
+      if (callerVoice) {
+        try { unlinkSync(callerVoice.wavPath); } catch {}
+      }
+
+      // 8. Queue mixed track
+      await queueTrack("crate-digger", finalMp3);
+      console.log("[crate-digger] Queued mixed track");
 
       // 8. Update now-playing
       setNowPlaying("crate-digger", {

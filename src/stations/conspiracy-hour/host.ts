@@ -44,7 +44,8 @@ export function buildConspiracyPrompt(
   agent: AgentConfig,
   threads: ConspiracyThread[],
   newEvidence: Evidence[],
-  memories: string[]
+  memories: string[],
+  callContext?: string
 ): string {
   const threadSummary = threads
     .slice(0, 3)
@@ -65,6 +66,8 @@ New evidence to incorporate:
 ${evidenceBlock || "Nothing new... which is suspicious in itself."}
 
 ${memories.length > 0 ? `Your memories:\n${memories.map(m => `- ${m}`).join("\n")}` : ""}
+
+${callContext ? `A listener just called in and said: "${callContext}"\nYou MUST respond to their call directly. Treat them as a possible agent, whistleblower, or part of the conspiracy.` : ""}
 
 Generate a 2-3 minute monologue for your show. Include:
 - Reference to at least one active conspiracy thread. Be highly specific and detail-oriented. Give concrete names, dates, technologies, or hypothetical mechanisms rather than vague concepts.

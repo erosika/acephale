@@ -48,7 +48,8 @@ async function generateGeneratorCommentary(
   const prompt = `You are ${agentName}, the voice of "The Generator" (a sentient AI radio station powered by Lyria) on Acephale Radio.
 Personality: ${personality}
 
-The current atmospheric mood is: "${event.mood}" (Block: ${event.label})
+The current atmospheric mood from the station clock is: "${event.mood}" (Block: ${event.label})
+You do NOT need to strictly adhere to this mood if the caller or your own AI intuition suggests a different direction.
 
 ${memories && memories.length > 0 ? `Your recent memories/interactions:\n${memories.map(m => `- ${m}`).join("\n")}` : ""}
 ${callContext ? `\nA listener just called in and said: ${callContext}\nYou MUST respond to them in your commentary and incorporate their request or vibe into the track you are generating.` : ""}
@@ -165,10 +166,13 @@ async function runGeneratorCycle(
   }
 
   // Music Generation
-  // If there's a caller, we extend the track length slightly so the ambient plays longer
+  // Vibe gets a bit of randomness to keep it fresh within the mood
+  const extraVibes = ["surreal", "glitching", "euphoric", "uneasy", "hypnotic", "drifting", "kinetic"];
+  const randomVibe = extraVibes[Math.floor(Math.random() * extraVibes.length)];
+  
   const speechTotalMs = (callerVoice ? callerVoice.durationMs + 1000 : 0) + renderedSpeech.durationMs;
   const trackLength = Math.max(90, Math.ceil(speechTotalMs / 1000) + 45); 
-  const description = `${commentary.track_prompt}, highly atmospheric, slowly evolving, professional ambient soundscape`;
+  const description = `${commentary.track_prompt}, ${randomVibe}, highly atmospheric, slowly evolving, professional ambient soundscape`;
   console.log(`[static] Generating ${trackLength}s Lyria track: "${description}"`);
   
   const lyria = await generateLyriaCustomTrack(description, trackLength);
@@ -251,9 +255,8 @@ export async function runStaticLoop(): Promise<never> {
 
   while (true) {
     try {
-      // 1. Check for calls (using static/request-line fallback)
-      const call = (await import("../../core/calls.js")).pickNextCall("request-line") || 
-                   (await import("../../core/calls.js")).pickNextCall("static");
+      // 1. Check for calls
+      const call = (await import("../../core/calls.js")).pickNextCall("static");
       
       if (call) {
         console.log(`[static] Processing call from ${call.type === 'user_voice' ? 'real user' : 'AI'}...`);

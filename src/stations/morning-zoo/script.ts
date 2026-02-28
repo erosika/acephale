@@ -44,6 +44,7 @@ ${sourceBlock}
 ## Instructions
 - Generate a natural, entertaining dialogue of exactly ${lineCount} lines
 - The hosts DISAGREE about almost everything. One is obnoxiously enthusiastic, the other is contemptuous.
+- If there is a [listener_call] in Today's Content, you MUST respond to it early in the script! Play off whatever the caller said.
 - Include: bickering, callbacks to previous episodes, teasing each other, reacting to content
 - They should reference other stations on Acephale Radio (Crate Digger, Conspiracy Hour, Request Line)
 - They might plan or discuss pranks on other DJs

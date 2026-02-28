@@ -68,8 +68,8 @@ function getAutopilotParams(): { decade: Decade; mood: Mood; country?: string } 
     moodCounts.set(s.mood, (moodCounts.get(s.mood) || 0) + 1);
   }
 
-  // Most popular from recent, with 30% chance of random drift
-  const doDrift = Math.random() < 0.3;
+  // Most popular from recent, with 50% chance of random drift
+  const doDrift = Math.random() < 0.5;
 
   const topDecade = doDrift
     ? ALL_DECADES[Math.floor(Math.random() * ALL_DECADES.length)]

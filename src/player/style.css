@@ -62,10 +62,176 @@ main {
   margin: 0 auto;
 }
 
-/* --- Dial --- */
+/* --- Station Display --- */
 
-.dial-container {
-  margin-bottom: 2rem;
+.station-display {
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  padding: 1.25rem 1.5rem;
+  margin-bottom: 1.5rem;
+  min-height: 4.5rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  position: relative;
+  overflow: hidden;
+}
+
+.station-display > * {
+  display: block;
+  width: 100%;
+  text-align: center;
+}
+
+.station-display .display-status {
+  font-family: 'Departure Mono', ui-monospace, monospace;
+  font-size: 0.65rem;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+  margin-bottom: 0.35rem;
+}
+
+.station-display .display-status.on-air {
+  color: var(--green);
+}
+
+.station-display .display-name {
+  font-family: 'Departure Mono', ui-monospace, monospace;
+  font-size: 1.1rem;
+  letter-spacing: 0.15em;
+  color: var(--fg-bright);
+}
+
+.station-display .display-format {
+  font-size: 0.75rem;
+  color: var(--fg-muted);
+  margin-top: 0.2rem;
+}
+
+.station-display .display-track {
+  font-size: 0.8rem;
+  color: var(--fg);
+  margin-top: 0.5rem;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.static-indicator {
+  font-family: 'Departure Mono', ui-monospace, monospace;
+  font-size: 1.1rem;
+  letter-spacing: 0.3em;
+  color: var(--fg-muted);
+  animation: static-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes static-pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+
+.tune-prompt {
+  font-family: 'Departure Mono', ui-monospace, monospace;
+  font-size: 0.9rem;
+  letter-spacing: 0.2em;
+  color: var(--accent-dim);
+}
+
+/* --- Frequency Band --- */
+
+.freq-band {
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  padding: 1rem 1.5rem 0.75rem;
+  margin-bottom: 1.5rem;
+  position: relative;
+}
+
+.freq-band-label {
+  font-family: 'Departure Mono', ui-monospace, monospace;
+  font-size: 0.55rem;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+  margin-bottom: 0.75rem;
+}
+
+.freq-band-stations {
+  position: relative;
+  height: 1.25rem;
+  margin-bottom: 0.35rem;
+}
+
+.freq-band-stations .station-label {
+  position: absolute;
+  transform: translateX(-50%);
+  font-family: 'Departure Mono', ui-monospace, monospace;
+  font-size: 0.5rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+
+.freq-band-stations .station-label.active {
+  color: var(--orange);
+}
+
+.freq-band-track {
+  position: relative;
+  height: 6px;
+  background: var(--border);
+  margin-bottom: 0.25rem;
+}
+
+.freq-band-track .station-marker {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--orange);
+  transform: translateX(-50%);
+}
+
+.freq-band-track .tuning-indicator {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 4px;
+  background: var(--accent);
+  transform: translateX(-50%);
+  transition: box-shadow 0.15s;
+}
+
+.freq-band-track .tuning-indicator.locked {
+  box-shadow: 0 0 8px var(--accent);
+}
+
+/* --- Controls Row --- */
+
+.controls-row {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: center;
+  gap: 2.5rem;
+  margin-bottom: 1.5rem;
+  padding: 1.5rem 0;
+}
+
+/* --- Rotary Dials --- */
+
+.dial-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  flex-shrink: 0;
 }
 
 .dial-label {
@@ -74,155 +240,140 @@ main {
   letter-spacing: 0.2em;
   text-transform: uppercase;
   color: var(--fg-muted);
-  margin-bottom: 0.5rem;
 }
 
-.dial {
-  display: flex;
-  align-items: center;
-  gap: 0;
-  border: 1px solid var(--border);
-  background: var(--bg-elevated);
+.dial-value {
+  font-family: 'Departure Mono', ui-monospace, monospace;
+  font-size: 0.55rem;
+  color: var(--fg-muted);
+}
+
+.tuning-dial,
+.volume-dial {
+  position: relative;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
   overflow: hidden;
 }
 
-.station {
-  flex: 1;
-  background: transparent;
-  border: none;
-  padding: 1rem 0.75rem;
-  cursor: pointer;
-  text-align: center;
-  color: var(--fg-muted);
-  font-family: inherit;
-  transition: background 0.15s, color 0.15s;
+.tuning-dial {
+  width: 140px;
+  height: 140px;
 }
 
-.station:hover {
-  background: rgba(126, 184, 246, 0.05);
+.volume-dial {
+  width: 100px;
+  height: 100px;
 }
 
-.station.active {
-  background: var(--bg);
-  color: var(--fg);
-  box-shadow: inset 0 -2px 0 var(--accent);
+.tuning-dial:active,
+.volume-dial:active {
+  cursor: grabbing;
 }
 
-.station-id {
-  font-family: 'Departure Mono', ui-monospace, monospace;
-  font-size: 1.2rem;
+.tuning-dial svg,
+.volume-dial svg {
+  width: 100%;
+  height: 100%;
   display: block;
-  color: var(--accent-dim);
-  margin-bottom: 0.25rem;
 }
 
-.station.active .station-id {
-  color: var(--accent);
+.dial-knob-ring {
+  fill: var(--bg-elevated);
+  stroke: var(--fg-muted);
+  stroke-width: 1.5;
 }
 
-.station-name {
-  font-family: 'Departure Mono', ui-monospace, monospace;
-  font-size: 0.65rem;
-  letter-spacing: 0.05em;
-  display: block;
-  color: inherit;
+.dial-knob-inner {
+  fill: none;
+  stroke: var(--fg-muted);
+  stroke-width: 0.5;
+  opacity: 0.4;
 }
 
-.station-format {
-  font-size: 0.65rem;
-  color: var(--fg-muted);
-  display: block;
-  margin-top: 0.15rem;
+.dial-tick {
+  stroke: var(--fg-muted);
+  stroke-width: 0.8;
+  opacity: 0.6;
 }
 
-.dial-gap {
-  font-family: 'Departure Mono', ui-monospace, monospace;
-  font-size: 0.5rem;
-  color: var(--border);
-  letter-spacing: -0.1em;
-  user-select: none;
+.dial-indicator {
+  stroke: var(--accent);
+  stroke-width: 2.5;
+  stroke-linecap: butt;
+}
+
+.volume-dial .dial-indicator {
+  stroke: var(--green);
+}
+
+/* --- Power Toggle --- */
+
+.power-toggle-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
   flex-shrink: 0;
 }
 
-/* --- Player --- */
-
-.player {
-  border: 1px solid var(--border);
-  padding: 1.5rem;
-  margin-bottom: 2rem;
-  background: var(--bg-elevated);
-}
-
-.now-playing {
+.power-toggle {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  margin-bottom: 0.75rem;
 }
 
-.track-info {
-  font-size: 0.85rem;
-  color: var(--fg);
-  margin-bottom: 1rem;
-  min-height: 1.2em;
-}
-
-.status-dot {
-  width: 8px;
-  height: 8px;
-  background: var(--fg-muted);
-  display: inline-block;
-}
-
-.status-dot.live {
-  background: var(--green);
-  animation: pulse 1.5s ease-in-out infinite;
-}
-
-@keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
-}
-
-.status-text {
+.power-toggle span {
   font-family: 'Departure Mono', ui-monospace, monospace;
-  font-size: 0.75rem;
+  font-size: 0.6rem;
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--fg-muted);
+  transition: color 0.15s;
 }
 
-.status-dot.live + .status-text {
-  color: var(--green);
-}
-
-.controls {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-}
-
-.control-btn {
-  font-family: 'Departure Mono', ui-monospace, monospace;
-  font-size: 0.75rem;
-  letter-spacing: 0.15em;
-  text-transform: uppercase;
-  background: transparent;
+.power-toggle span.active {
   color: var(--fg-bright);
-  border: 1px solid var(--border);
-  padding: 0.5rem 1.25rem;
-  cursor: pointer;
-  transition: border-color 0.15s, color 0.15s;
 }
 
-.control-btn:hover {
-  border-color: var(--accent);
-  color: var(--accent);
+.power-switch {
+  position: relative;
+  width: 40px;
+  height: 20px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+  outline: none;
 }
+
+.power-switch::before {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 14px;
+  background: var(--fg-muted);
+  transition: left 0.2s, background 0.2s;
+}
+
+.power-switch:checked::before {
+  left: 20px;
+  background: var(--green);
+}
+
+.power-switch:checked {
+  border-color: var(--green);
+}
+
+/* --- Call-in Button --- */
 
 .call-in-btn {
   font-family: 'Departure Mono', ui-monospace, monospace;
-  font-size: 0.75rem;
+  font-size: 0.7rem;
   letter-spacing: 0.15em;
   text-transform: uppercase;
   background: transparent;
@@ -244,20 +395,18 @@ main {
   animation: pulse 1.5s ease-in-out infinite;
 }
 
-input[type="range"] {
-  flex: 1;
-  -webkit-appearance: none;
-  height: 2px;
-  background: var(--border);
-  outline: none;
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
 }
 
-input[type="range"]::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  width: 12px;
-  height: 12px;
-  background: var(--fg);
-  cursor: pointer;
+/* --- Utility Row (call-in below controls) --- */
+
+.utility-row {
+  display: flex;
+  justify-content: center;
+  gap: 1rem;
+  margin-bottom: 2rem;
 }
 
 /* --- History --- */
@@ -392,16 +541,22 @@ footer {
 /* --- Responsive --- */
 
 @media (max-width: 600px) {
-  .dial {
-    flex-wrap: wrap;
+  .controls-row {
+    gap: 1rem;
   }
 
-  .dial-gap {
-    display: none;
+  .tuning-dial {
+    width: 110px;
+    height: 110px;
   }
 
-  .station {
-    flex: 1 1 45%;
+  .volume-dial {
+    width: 80px;
+    height: 80px;
+  }
+
+  .freq-band-stations .station-label {
+    font-size: 0.4rem;
   }
 
   footer {

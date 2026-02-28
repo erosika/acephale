@@ -13,52 +13,59 @@
   </header>
 
   <main>
-    <section class="dial-container">
-      <div class="dial-label">STATION</div>
-      <nav class="dial">
-        <button class="station" data-station="morning-zoo" data-mount="zoo">
-          <span class="station-id">1</span>
-          <span class="station-name">Morning Zoo</span>
-          <span class="station-format">talk + pop</span>
-        </button>
-        <span class="dial-gap">///</span>
-        <button class="station active" data-station="crate-digger" data-mount="crate">
-          <span class="station-id">2</span>
-          <span class="station-name">Crate Digger</span>
-          <span class="station-format">deep cuts</span>
-        </button>
-        <span class="dial-gap">///</span>
-        <button class="station" data-station="conspiracy-hour" data-mount="conspiracy">
-          <span class="station-id">3</span>
-          <span class="station-name">Conspiracy Hour</span>
-          <span class="station-format">late-night talk</span>
-        </button>
-        <span class="dial-gap">///</span>
-        <button class="station" data-station="request-line" data-mount="request">
-          <span class="station-id">4</span>
-          <span class="station-name">Request Line</span>
-          <span class="station-format">listener-driven</span>
-        </button>
-      </nav>
+    <!-- Station Display -->
+    <section class="station-display" id="station-display">
+      <span class="tune-prompt">TUNE IN</span>
     </section>
 
-    <section class="player">
-      <div class="now-playing">
-        <span class="status-dot live"></span>
-        <span class="status-text">TUNING IN...</span>
-      </div>
-      <div class="track-info" id="track-info"></div>
-      <div class="controls">
-        <input type="range" id="volume" min="0" max="100" value="80">
-        <button id="call-in-btn" class="call-in-btn" title="Call in to the station">🎙️ CALL IN</button>
+    <!-- Frequency Band -->
+    <section class="freq-band">
+      <div class="freq-band-label">FREQUENCY</div>
+      <div class="freq-band-stations" id="freq-stations"></div>
+      <div class="freq-band-track" id="freq-track">
+        <div class="tuning-indicator" id="tuning-indicator"></div>
       </div>
     </section>
 
+    <!-- Controls: Tuning + Power + Volume -->
+    <div class="controls-row">
+      <div class="dial-wrap">
+        <span class="dial-label">TUNING</span>
+        <div class="tuning-dial" id="tuning-dial">
+          <svg viewBox="0 0 100 100" width="140" height="140" id="tuning-svg"></svg>
+        </div>
+        <span class="dial-value" id="tuning-value"></span>
+      </div>
+
+      <div class="power-toggle-wrap">
+        <div class="power-toggle">
+          <span id="power-off-label" class="active">OFF</span>
+          <input type="checkbox" class="power-switch" id="power-switch">
+          <span id="power-on-label">ON</span>
+        </div>
+      </div>
+
+      <div class="dial-wrap">
+        <span class="dial-label">VOLUME</span>
+        <div class="volume-dial" id="volume-dial">
+          <svg viewBox="0 0 100 100" width="100" height="100" id="volume-svg"></svg>
+        </div>
+        <span class="dial-value" id="volume-value"></span>
+      </div>
+    </div>
+
+    <!-- Utility row -->
+    <div class="utility-row">
+      <button id="call-in-btn" class="call-in-btn" title="Call in to the station">CALL IN</button>
+    </div>
+
+    <!-- History -->
     <section class="history" id="history">
       <h2>RECENTLY PLAYED</h2>
       <div class="history-entries" id="history-entries"></div>
     </section>
 
+    <!-- Transcript -->
     <section class="transcript" id="transcript">
       <h2>LIVE TRANSCRIPT</h2>
       <div class="transcript-lines"></div>
@@ -70,137 +77,435 @@
     <span>Google DeepMind Hackathon 2026</span>
   </footer>
 
-  <!-- Unmute overlay -- browsers block autoplay until user gesture -->
+  <!-- Unmute overlay -->
   <div id="unmute-overlay" class="unmute-overlay">
     <button id="unmute-btn" class="unmute-btn">TUNE IN</button>
   </div>
 
   <script>
-    // --- All streams stay alive, switching just mutes/unmutes ---
-    const MOUNTS = { 'morning-zoo': 'zoo', 'crate-digger': 'crate', 'conspiracy-hour': 'conspiracy', 'request-line': 'request' };
-    const streams = {};  // mount -> Audio
-    let currentStation = 'crate-digger';
-    let currentMount = 'crate';
+    // ========================================================
+    // STATIONS
+    // ========================================================
+    const STATIONS = [
+      { id: 'morning-zoo',     mount: 'zoo',        pos: 15, name: 'Morning Zoo',      format: 'talk + pop' },
+      { id: 'crate-digger',    mount: 'crate',      pos: 38, name: 'Crate Digger',     format: 'deep cuts' },
+      { id: 'conspiracy-hour', mount: 'conspiracy',  pos: 62, name: 'Conspiracy Hour',  format: 'late-night talk' },
+      { id: 'request-line',    mount: 'request',     pos: 85, name: 'Request Line',     format: 'listener-driven' },
+    ];
+    const LOCK_TOLERANCE = 4;
+
+    // ========================================================
+    // STATE
+    // ========================================================
+    let tuning = 50;          // 0-100
+    let volume = 80;          // 0-100
+    let isPowerOn = false;
+    let lockedStation = null;  // Station object or null
     let userHasInteracted = false;
 
-    const volumeSlider = document.getElementById('volume');
-    const statusText = document.querySelector('.status-text');
-    const trackInfo = document.getElementById('track-info');
-    const historyEntries = document.getElementById('history-entries');
-    const stationBtns = document.querySelectorAll('.station');
-    const unmuteOverlay = document.getElementById('unmute-overlay');
-    const unmuteBtn = document.getElementById('unmute-btn');
+    // Drag state
+    let dragging = null;       // 'tuning' | 'volume' | null
+    let dragStartAngle = 0;
+    let dragStartValue = 0;
 
+    // Audio
+    const streams = {};        // mount -> Audio
+    let audioCtx = null;
+    let staticSource = null;
+    let staticGain = null;
+
+    // ========================================================
+    // DOM
+    // ========================================================
+    const displayEl        = document.getElementById('station-display');
+    const freqStationsEl   = document.getElementById('freq-stations');
+    const freqTrackEl      = document.getElementById('freq-track');
+    const tuningIndicator  = document.getElementById('tuning-indicator');
+    const tuningDialEl     = document.getElementById('tuning-dial');
+    const tuningSvg        = document.getElementById('tuning-svg');
+    const tuningValueEl    = document.getElementById('tuning-value');
+    const volumeDialEl     = document.getElementById('volume-dial');
+    const volumeSvg        = document.getElementById('volume-svg');
+    const volumeValueEl    = document.getElementById('volume-value');
+    const powerSwitch      = document.getElementById('power-switch');
+    const powerOffLabel    = document.getElementById('power-off-label');
+    const powerOnLabel     = document.getElementById('power-on-label');
+    const historyEntries   = document.getElementById('history-entries');
+    const unmuteOverlay    = document.getElementById('unmute-overlay');
+    const unmuteBtn        = document.getElementById('unmute-btn');
+    const callBtn          = document.getElementById('call-in-btn');
+
+    // ========================================================
+    // SVG DIAL RENDERING
+    // ========================================================
+    function buildDialSVG(svg, opts) {
+      const ns = 'http://www.w3.org/2000/svg';
+
+      // Outer ring
+      const outer = document.createElementNS(ns, 'circle');
+      outer.setAttribute('cx', '50'); outer.setAttribute('cy', '50');
+      outer.setAttribute('r', '48');
+      outer.classList.add('dial-knob-ring');
+      svg.appendChild(outer);
+
+      // Inner ring
+      const inner = document.createElementNS(ns, 'circle');
+      inner.setAttribute('cx', '50'); inner.setAttribute('cy', '50');
+      inner.setAttribute('r', '42');
+      inner.classList.add('dial-knob-inner');
+      svg.appendChild(inner);
+
+      // 24 tick marks
+      for (let i = 0; i < 24; i++) {
+        const angle = (i / 24) * 360;
+        const rad = (angle * Math.PI) / 180;
+        const x1 = 50 + Math.cos(rad) * 44;
+        const y1 = 50 + Math.sin(rad) * 44;
+        const x2 = 50 + Math.cos(rad) * 48;
+        const y2 = 50 + Math.sin(rad) * 48;
+        const tick = document.createElementNS(ns, 'line');
+        tick.setAttribute('x1', x1); tick.setAttribute('y1', y1);
+        tick.setAttribute('x2', x2); tick.setAttribute('y2', y2);
+        tick.classList.add('dial-tick');
+        svg.appendChild(tick);
+      }
+
+      // Indicator line (the pointer)
+      const indicator = document.createElementNS(ns, 'line');
+      indicator.setAttribute('x1', '50'); indicator.setAttribute('y1', '50');
+      indicator.setAttribute('x2', '50'); indicator.setAttribute('y2', '12');
+      indicator.classList.add('dial-indicator');
+      indicator.id = opts.indicatorId;
+      svg.appendChild(indicator);
+
+      // Group for rotation
+      const g = document.createElementNS(ns, 'g');
+      g.id = opts.groupId;
+      g.appendChild(indicator);
+      svg.appendChild(g);
+    }
+
+    function setDialRotation(groupId, value) {
+      const deg = (value / 100) * 270 - 135;
+      const g = document.getElementById(groupId);
+      if (g) g.setAttribute('transform', `rotate(${deg} 50 50)`);
+    }
+
+    // Build both dials
+    buildDialSVG(tuningSvg, { indicatorId: 'tuning-indicator-line', groupId: 'tuning-group' });
+    buildDialSVG(volumeSvg, { indicatorId: 'volume-indicator-line', groupId: 'volume-group' });
+
+    // ========================================================
+    // FREQUENCY BAND
+    // ========================================================
+    function buildFreqBand() {
+      // Station labels
+      STATIONS.forEach(s => {
+        const label = document.createElement('span');
+        label.className = 'station-label';
+        label.textContent = s.name;
+        label.style.left = s.pos + '%';
+        label.dataset.stationId = s.id;
+        freqStationsEl.appendChild(label);
+      });
+
+      // Station markers on track
+      STATIONS.forEach(s => {
+        const marker = document.createElement('div');
+        marker.className = 'station-marker';
+        marker.style.left = s.pos + '%';
+        freqTrackEl.insertBefore(marker, tuningIndicator);
+      });
+    }
+    buildFreqBand();
+
+    // ========================================================
+    // STREAMS (all alive, mute/unmute switching)
+    // ========================================================
     function streamUrl(mount) {
       return `http://${location.hostname}:8000/${mount}`;
     }
 
-    // Create and start all 4 streams (muted except active)
     function initStreams() {
-      for (const [station, mount] of Object.entries(MOUNTS)) {
-        if (streams[mount]) continue;
-        const a = new Audio(streamUrl(mount));
+      STATIONS.forEach(s => {
+        if (streams[s.mount]) return;
+        const a = new Audio(streamUrl(s.mount));
         a.volume = 0;
         a.preload = 'none';
-        streams[mount] = a;
+        streams[s.mount] = a;
 
         a.addEventListener('error', () => {
-          console.error(`[radio] ${mount} stream error, reconnecting...`);
+          console.error(`[radio] ${s.mount} stream error, reconnecting...`);
           setTimeout(() => {
-            a.src = streamUrl(mount);
+            a.src = streamUrl(s.mount);
             a.load();
             if (userHasInteracted) a.play().catch(() => {});
           }, 5000);
         });
-      }
+      });
     }
 
-    function startAll() {
-      const vol = volumeSlider.value / 100;
+    function startAllStreams() {
       for (const [mount, a] of Object.entries(streams)) {
-        a.volume = mount === currentMount ? vol : 0;
         a.play().catch(() => {});
       }
+      applyStreamVolumes();
     }
 
-    function tuneIn(mount) {
-      const vol = volumeSlider.value / 100;
-      currentMount = mount;
-
-      // Instant switch: unmute target, mute others
-      for (const [m, a] of Object.entries(streams)) {
-        a.volume = m === mount ? vol : 0;
-      }
-
-      const active = streams[mount];
-      if (active) {
-        const name = document.querySelector('.station.active .station-name')?.textContent || mount;
-        if (active.readyState >= 2) {
-          statusText.textContent = `ON AIR \u2014 ${name.toUpperCase()}`;
-        } else {
-          statusText.textContent = 'BUFFERING...';
-          active.addEventListener('playing', () => {
-            if (currentMount === mount) {
-              statusText.textContent = `ON AIR \u2014 ${name.toUpperCase()}`;
-            }
-          }, { once: true });
-        }
+    function applyStreamVolumes() {
+      const vol = volume / 100;
+      for (const [mount, a] of Object.entries(streams)) {
+        a.volume = (lockedStation && mount === lockedStation.mount) ? vol : 0;
       }
     }
 
-    // Unmute overlay
+    // ========================================================
+    // STATIC NOISE ENGINE
+    // ========================================================
+    function initAudioContext() {
+      if (audioCtx) return;
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+      // Create 2s white noise buffer
+      const bufferSize = audioCtx.sampleRate * 2;
+      const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let i = 0; i < bufferSize; i++) {
+        data[i] = Math.random() * 2 - 1;
+      }
+
+      staticSource = audioCtx.createBufferSource();
+      staticSource.buffer = buffer;
+      staticSource.loop = true;
+
+      staticGain = audioCtx.createGain();
+      staticGain.gain.value = 0;
+
+      staticSource.connect(staticGain);
+      staticGain.connect(audioCtx.destination);
+      staticSource.start();
+    }
+
+    function updateStaticGain() {
+      if (!staticGain || !audioCtx) return;
+
+      if (!isPowerOn) {
+        staticGain.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.1);
+        return;
+      }
+
+      // Distance to nearest station
+      let minDist = Infinity;
+      for (const s of STATIONS) {
+        const d = Math.abs(tuning - s.pos);
+        if (d < minDist) minDist = d;
+      }
+
+      // Map distance to gain: at station (<=LOCK_TOLERANCE) = 0, far away = full
+      let staticLevel;
+      if (minDist <= LOCK_TOLERANCE) {
+        staticLevel = 0;
+      } else {
+        // Normalize: LOCK_TOLERANCE..50 -> 0..1
+        staticLevel = Math.min((minDist - LOCK_TOLERANCE) / 20, 1);
+      }
+
+      const targetGain = staticLevel * (volume / 100) * 0.08;
+      staticGain.gain.linearRampToValueAtTime(targetGain, audioCtx.currentTime + 0.1);
+    }
+
+    // ========================================================
+    // STATION LOCKING
+    // ========================================================
+    function findLockedStation() {
+      for (const s of STATIONS) {
+        if (Math.abs(tuning - s.pos) <= LOCK_TOLERANCE) return s;
+      }
+      return null;
+    }
+
+    function updateLock() {
+      const prev = lockedStation;
+      lockedStation = isPowerOn ? findLockedStation() : null;
+      applyStreamVolumes();
+      updateStaticGain();
+      updateDisplay();
+      updateFreqBand();
+
+      if (lockedStation && (!prev || prev.id !== lockedStation.id)) {
+        fetchNowPlaying();
+        fetchHistory();
+      }
+    }
+
+    // ========================================================
+    // DISPLAY
+    // ========================================================
+    function updateDisplay() {
+      if (!isPowerOn) {
+        displayEl.innerHTML = '<span class="tune-prompt">TUNE IN</span>';
+        return;
+      }
+      if (lockedStation) {
+        displayEl.innerHTML =
+          `<div class="display-status on-air">ON AIR</div>` +
+          `<div class="display-name">${lockedStation.name.toUpperCase()}</div>` +
+          `<div class="display-format">${lockedStation.format}</div>` +
+          `<div class="display-track" id="display-track"></div>`;
+        // Restore track info if we have it
+        fetchNowPlaying();
+      } else {
+        displayEl.innerHTML = '<span class="static-indicator">STATIC</span>';
+      }
+    }
+
+    function updateFreqBand() {
+      // Move tuning indicator
+      tuningIndicator.style.left = tuning + '%';
+      tuningIndicator.classList.toggle('locked', !!lockedStation);
+
+      // Highlight active station label
+      freqStationsEl.querySelectorAll('.station-label').forEach(el => {
+        el.classList.toggle('active', lockedStation && el.dataset.stationId === lockedStation.id);
+      });
+    }
+
+    // ========================================================
+    // DIAL INTERACTION (delta-angle tracking)
+    // ========================================================
+    function getAngle(el, e) {
+      const rect = el.getBoundingClientRect();
+      const cx = rect.left + rect.width / 2;
+      const cy = rect.top + rect.height / 2;
+      const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+      const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+      return Math.atan2(clientY - cy, clientX - cx);
+    }
+
+    function handleDialStart(which, el, e) {
+      if (!isPowerOn && which === 'tuning') return;
+      e.preventDefault();
+      e.stopPropagation();
+      dragging = which;
+      dragStartAngle = getAngle(el, e);
+      dragStartValue = which === 'tuning' ? tuning : volume;
+    }
+
+    tuningDialEl.addEventListener('mousedown', e => handleDialStart('tuning', tuningDialEl, e));
+    tuningDialEl.addEventListener('touchstart', e => handleDialStart('tuning', tuningDialEl, e), { passive: false });
+    volumeDialEl.addEventListener('mousedown', e => handleDialStart('volume', volumeDialEl, e));
+    volumeDialEl.addEventListener('touchstart', e => handleDialStart('volume', volumeDialEl, e), { passive: false });
+
+    function handleMove(e) {
+      if (!dragging) return;
+      e.preventDefault();
+
+      const el = dragging === 'tuning' ? tuningDialEl : volumeDialEl;
+      const angle = getAngle(el, e);
+      const delta = angle - dragStartAngle;
+      const deltaValue = (delta / (Math.PI * 2)) * 100;
+      const newValue = Math.max(0, Math.min(100, dragStartValue + deltaValue));
+
+      if (dragging === 'tuning') {
+        tuning = newValue;
+        setDialRotation('tuning-group', tuning);
+        tuningValueEl.textContent = `[${Math.round(tuning)}]`;
+        updateLock();
+      } else {
+        volume = newValue;
+        setDialRotation('volume-group', volume);
+        volumeValueEl.textContent = `[${Math.round(volume)}]`;
+        applyStreamVolumes();
+        updateStaticGain();
+      }
+    }
+
+    function handleEnd() {
+      if (!dragging) return;
+      dragging = null;
+      document.body.style.overflow = '';
+      document.body.style.userSelect = '';
+    }
+
+    document.addEventListener('mousemove', handleMove);
+    document.addEventListener('mouseup', handleEnd);
+    document.addEventListener('touchmove', handleMove, { passive: false });
+    document.addEventListener('touchend', handleEnd);
+
+    // Prevent body scroll during dial drag
+    document.addEventListener('touchmove', e => {
+      if (dragging) {
+        e.preventDefault();
+        document.body.style.overflow = 'hidden';
+        document.body.style.userSelect = 'none';
+      }
+    }, { passive: false });
+
+    // ========================================================
+    // POWER TOGGLE
+    // ========================================================
+    powerSwitch.addEventListener('change', () => {
+      isPowerOn = powerSwitch.checked;
+      powerOffLabel.classList.toggle('active', !isPowerOn);
+      powerOnLabel.classList.toggle('active', isPowerOn);
+      updateLock();
+    });
+
+    // ========================================================
+    // UNMUTE OVERLAY
+    // ========================================================
     unmuteBtn.addEventListener('click', () => {
       userHasInteracted = true;
       unmuteOverlay.classList.add('hidden');
+      initAudioContext();
       initStreams();
-      startAll();
-      tuneIn(currentMount);
+      startAllStreams();
+
+      // Power on and set tuning to first station
+      isPowerOn = true;
+      powerSwitch.checked = true;
+      powerOffLabel.classList.remove('active');
+      powerOnLabel.classList.add('active');
+      tuning = STATIONS[0].pos;
+
+      setDialRotation('tuning-group', tuning);
+      setDialRotation('volume-group', volume);
+      tuningValueEl.textContent = `[${Math.round(tuning)}]`;
+      volumeValueEl.textContent = `[${Math.round(volume)}]`;
+
+      updateLock();
     });
 
-    // Station switching -- instant, no teardown
-    stationBtns.forEach(btn => {
-      btn.addEventListener('click', () => {
-        currentStation = btn.dataset.station;
-        stationBtns.forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        tuneIn(btn.dataset.mount);
-        fetchHistory();
-        fetchNowPlaying();
-      });
-    });
-
-    // Volume
-    volumeSlider.addEventListener('input', () => {
-      const vol = volumeSlider.value / 100;
-      const active = streams[currentMount];
-      if (active) active.volume = vol;
-    });
-
-    // Now-playing polling
+    // ========================================================
+    // NOW-PLAYING & HISTORY POLLING
+    // ========================================================
     setInterval(() => {
-      fetchNowPlaying();
-      fetchHistory();
+      if (lockedStation) {
+        fetchNowPlaying();
+        fetchHistory();
+      }
     }, 8000);
 
     async function fetchNowPlaying() {
+      if (!lockedStation) return;
       try {
-        const res = await fetch(`/stations/${currentStation}/now-playing`);
+        const res = await fetch(`/stations/${lockedStation.id}/now-playing`);
         const data = await res.json();
-        if (data.title) {
+        const trackEl = document.getElementById('display-track');
+        if (trackEl && data.title) {
           let info = data.title;
           if (data.artist) info += ` \u2014 ${data.artist}`;
           if (data.year) info += ` (${data.year})`;
           if (data.country) info += ` [${data.country}]`;
-          trackInfo.textContent = info;
-        } else {
-          trackInfo.textContent = '';
+          trackEl.textContent = info;
         }
       } catch {}
     }
 
     async function fetchHistory() {
+      if (!lockedStation) return;
       try {
-        const res = await fetch(`/stations/${currentStation}/history?limit=10`);
+        const res = await fetch(`/stations/${lockedStation.id}/history?limit=10`);
         const entries = await res.json();
         if (!Array.isArray(entries) || entries.length === 0) {
           historyEntries.innerHTML = '<div class="history-empty">No tracks yet</div>';
@@ -219,70 +524,71 @@
       }
     }
 
-    // Boot
-    initStreams();
-    fetchNowPlaying();
-    fetchHistory();
-    unmuteOverlay.classList.remove('hidden');
-
-    // --- Voice Calling via WebSocket ---
-    const callBtn = document.getElementById('call-in-btn');
+    // ========================================================
+    // VOICE CALL-IN (WebSocket)
+    // ========================================================
     let mediaRecorder = null;
     let callWs = null;
 
     callBtn.addEventListener('click', async () => {
       if (mediaRecorder && mediaRecorder.state === 'recording') {
-        // Stop recording
         mediaRecorder.stop();
         callBtn.classList.remove('recording');
-        callBtn.textContent = '🎙️ CALL IN';
+        callBtn.textContent = 'CALL IN';
         return;
       }
 
-      // Start recording
+      if (!lockedStation) return;
+
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        
         callWs = new WebSocket(`ws://${location.host}/ws/call`);
-        
+
         callWs.onopen = () => {
-          callWs.send(JSON.stringify({ station: currentStation }));
-          
+          callWs.send(JSON.stringify({ station: lockedStation.id }));
+
           mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
-          
+
           mediaRecorder.ondataavailable = (e) => {
             if (e.data.size > 0 && callWs.readyState === WebSocket.OPEN) {
               callWs.send(e.data);
             }
           };
-          
+
           mediaRecorder.onstop = () => {
             stream.getTracks().forEach(t => t.stop());
             setTimeout(() => {
-              if (callWs.readyState === WebSocket.OPEN) {
-                callWs.close();
-              }
-            }, 500); // Wait for final chunks
+              if (callWs.readyState === WebSocket.OPEN) callWs.close();
+            }, 500);
           };
-          
+
           mediaRecorder.start(250);
           callBtn.classList.add('recording');
-          callBtn.textContent = '🔴 RECORDING...';
+          callBtn.textContent = 'RECORDING...';
         };
 
-        callWs.onerror = (e) => {
-          console.error('Call WebSocket error', e);
+        callWs.onerror = () => {
           if (mediaRecorder) mediaRecorder.stop();
           callBtn.classList.remove('recording');
-          callBtn.textContent = '🎙️ CALL IN';
+          callBtn.textContent = 'CALL IN';
         };
 
       } catch (err) {
         console.error('Failed to access microphone', err);
-        alert('Could not access microphone.');
       }
     });
 
+    // ========================================================
+    // BOOT
+    // ========================================================
+    initStreams();
+    setDialRotation('tuning-group', tuning);
+    setDialRotation('volume-group', volume);
+    tuningValueEl.textContent = `[${Math.round(tuning)}]`;
+    volumeValueEl.textContent = `[${Math.round(volume)}]`;
+    updateDisplay();
+    updateFreqBand();
+    unmuteOverlay.classList.remove('hidden');
   </script>
 </body>
 </html>
