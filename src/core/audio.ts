@@ -20,7 +20,7 @@ export type TrackMetadata = {
 
 // --- ffmpeg Helpers ---
 
-async function runFfmpeg(args: string[]): Promise<void> {
+export async function runFfmpeg(args: string[]): Promise<void> {
   const proc = Bun.spawn(["ffmpeg", "-y", ...args], {
     stdout: "pipe",
     stderr: "pipe",
@@ -112,6 +112,57 @@ export async function convertToMp3(
   args.push(out);
   await runFfmpeg(args);
   return out;
+}
+
+export async function mixVoiceOverMusic(
+  voiceWavs: { path: string; delayMs?: number }[],
+  musicMp3: string,
+  outputMp3: string,
+  metadata?: TrackMetadata
+): Promise<string> {
+  const tmpDir = join(import.meta.dir, "..", "..", ".tmp");
+  mkdirSync(tmpDir, { recursive: true });
+  const stamp = Date.now();
+
+  // 1. Concat all voices with their delays into a single track
+  const segments: AudioSegment[] = [];
+  for (let i = 0; i < voiceWavs.length; i++) {
+    const v = voiceWavs[i];
+    const { readFileSync } = await import("node:fs");
+    if (v.delayMs && v.delayMs > 0) {
+      const silPath = join(tmpDir, `sil-${stamp}-${i}.wav`);
+      await generateSilence(v.delayMs, silPath);
+      segments.push({ audio: readFileSync(silPath) });
+      try { unlinkSync(silPath); } catch {}
+    }
+    segments.push({ audio: readFileSync(v.path) });
+  }
+
+  const combinedVoiceWav = join(tmpDir, `combined-voice-${stamp}.wav`);
+  await concatAudio(segments, combinedVoiceWav, 0);
+
+  // 2. Mix voice track over music track (music volume at 50% during the mix)
+  // We use the 'amix' filter.
+  // [0:a] is music, [1:a] is voice.
+  // Let's keep it simple: music at 0.4 volume, voice at 1.2 volume.
+  const mixedWav = join(tmpDir, `mixed-${stamp}.wav`);
+  await runFfmpeg([
+    "-i", musicMp3,
+    "-i", combinedVoiceWav,
+    "-filter_complex", "[0:a]volume=0.4[bg];[1:a]volume=1.2[fg];[bg][fg]amix=inputs=2:duration=longest",
+    mixedWav
+  ]);
+
+  // 3. Normalize and convert to final MP3
+  const normWav = await normalizeAudio(mixedWav);
+  await convertToMp3(normWav, outputMp3, metadata);
+
+  // Cleanup
+  try { unlinkSync(combinedVoiceWav); } catch {}
+  try { unlinkSync(mixedWav); } catch {}
+  try { unlinkSync(normWav); } catch {}
+
+  return outputMp3;
 }
 
 export async function remuxWithMetadata(

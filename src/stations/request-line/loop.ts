@@ -9,13 +9,13 @@ import { loadAgentRoster, getStationAgents } from "../../core/config.js";
 import { getGeminiFlash, generateStructured } from "../../core/gemini.js";
 import { getAgentMemory, saveRequestLineCycle } from "../../core/honcho.js";
 import { synthesizeSpeech } from "../../core/tts.js";
-import { concatAudio, normalizeAudio, convertToMp3, applyFades, type AudioSegment } from "../../core/audio.js";
+import { concatAudio, normalizeAudio, convertToMp3, applyFades, mixVoiceOverMusic, type AudioSegment } from "../../core/audio.js";
 import { randomTrack, downloadAndTagTrack, type RadioooooTrack, type Decade, type Mood, ALL_DECADES } from "../../core/radiooooo.js";
 import { queueTrack } from "../../core/stream.js";
 import { setNowPlaying } from "../../core/nowplaying.js";
 import { logArchiveEntry } from "../../core/archive.js";
 import { generateLyriaCustomTrack } from "../../core/lyria.js";
-import { pickNextCall, processCallWithLyriaUnderbed } from "../../core/calls.js";
+import { pickNextCall, processCallVoice } from "../../core/calls.js";
 
 // --- Types ---
 
@@ -101,19 +101,21 @@ async function generateAutopilotCommentary(
   track: RadioooooTrack,
   memories: string[],
   agentName: string,
-  personality: string
+  personality: string,
+  callContext?: string
 ): Promise<AutopilotCommentary> {
   const model = getGeminiFlash();
   const prompt = `You are ${agentName}, the host of The Request Line on Acephale Radio.
 Personality: ${personality}
 
-No callers right now, so you're playing your own picks. You're about to play:
+You're about to play:
 "${track.title}" by ${track.artist} (${track.year}, ${track.country})
 
 ${memories.length > 0 ? `Your memories:\n${memories.map(m => `- ${m}`).join("\n")}` : ""}
+${callContext ? `\nA listener just called in and said: "${callContext}"\nYou MUST respond to them in your commentary. Acknowledge what they said, and explain how this track relates to their request or vibe.` : "\nNo callers right now, so you're playing your own picks."}
 
 Write a warm, brief introduction (2-3 sentences). You're talking to whoever might be listening.
-Mention you're open for calls. Be personal and enthusiastic about the music.
+Be personal and enthusiastic about the music.
 
 Respond with JSON:
 {
@@ -152,7 +154,8 @@ async function renderSpeech(
 
 async function runAutopilotCycle(
   agent: { name: string; voice: string; personality: string; honchoUser: string },
-  memories: string[]
+  memories: string[],
+  call?: import("../../core/calls.js").CallRequest
 ): Promise<number> {
   // 1. Pick track based on taste model
   const params = getAutopilotParams();
@@ -168,43 +171,70 @@ async function runAutopilotCycle(
     console.log("[request-line] No track found, trying broader search");
     const fallback = await randomTrack({ decades: [params.decade] });
     if (!fallback || !fallback.audioUrl) {
-      return runLyriaFallback(agent, params, memories);
+      return runLyriaFallback(agent, params, memories, call);
     }
-    return runTrackCycle(agent, fallback, memories);
+    return runTrackCycle(agent, fallback, memories, call);
   }
 
-  return runTrackCycle(agent, track, memories);
+  return runTrackCycle(agent, track, memories, call);
 }
 
 async function runTrackCycle(
   agent: { name: string; voice: string; personality: string; honchoUser: string },
   track: RadioooooTrack,
-  memories: string[]
+  memories: string[],
+  call?: import("../../core/calls.js").CallRequest
 ): Promise<number> {
   console.log(`[request-line] Playing: "${track.title}" by ${track.artist} (${track.year}, ${track.country})`);
 
   // Generate commentary
-  const commentary = await generateAutopilotCommentary(track, memories, agent.name, agent.personality);
+  const callContext = call ? call.text : undefined;
+  const commentary = await generateAutopilotCommentary(track, memories, agent.name, agent.personality, callContext);
 
   // Render speech
   const rendered = await renderSpeech(commentary.commentary, agent.voice);
 
+  // Process Caller voice (if any)
+  let callerVoice: { wavPath: string; durationMs: number } | null = null;
+  if (call) {
+    callerVoice = await processCallVoice(call);
+  }
+
   // Download and tag track
   const taggedPath = await downloadAndTagTrack(track, "Acephale Radio -- Request Line");
 
-  // Apply fades to track only (TTS stays clean)
-  await applyFades(taggedPath, { fadeInSec: 1.0, fadeOutSec: 2.5 });
+  // Mix voices over track intro
+  const tmpDir = join(import.meta.dir, "..", "..", "..", ".tmp");
+  const finalMp3 = join(tmpDir, `request-final-${Date.now()}.mp3`);
+  
+  const voicesToMix: { path: string; delayMs?: number }[] = [];
+  let currentDelay = 2000; // Let music play for 2s first
+  
+  if (callerVoice) {
+    voicesToMix.push({ path: callerVoice.wavPath, delayMs: currentDelay });
+    currentDelay = 1500; // Gap between caller and DJ
+  }
+  
+  voicesToMix.push({ path: rendered.mp3Path.replace(".mp3", ".wav"), delayMs: currentDelay });
 
-  // Queue
-  const trackMeta = {
+  console.log(`[request-line] Mixing voices over Radiooooo track...`);
+  await mixVoiceOverMusic(voicesToMix, taggedPath, finalMp3, {
     title: track.title,
     artist: track.artist,
     album: track.album || `${track.country} ${track.decade}s`,
     year: track.year,
-  };
+  });
 
-  await queueTrack("request-line", rendered.mp3Path);
-  await queueTrack("request-line", taggedPath, trackMeta);
+  // Cleanup temps
+  const { unlinkSync } = await import("node:fs");
+  try { unlinkSync(taggedPath); } catch {}
+  try { unlinkSync(rendered.mp3Path); } catch {}
+  if (callerVoice) {
+    try { unlinkSync(callerVoice.wavPath); } catch {}
+  }
+
+  // Queue
+  await queueTrack("request-line", finalMp3);
 
   // Update state
   setNowPlaying("request-line", {
@@ -241,7 +271,7 @@ async function runTrackCycle(
   }
 
   // Return wait time -- start prepping next before current ends (no dead air)
-  const totalMs = rendered.durationMs + ((track.length || 180) * 1000);
+  const totalMs = (track.length || 180) * 1000;
   const prepLeadMs = Math.min(30000, totalMs * 0.4);
   return Math.max(5000, totalMs - prepLeadMs);
 }
@@ -251,7 +281,8 @@ async function runTrackCycle(
 async function runLyriaFallback(
   agent: { name: string; voice: string; personality: string; honchoUser: string },
   params: { decade: Decade; mood: Mood; country?: string },
-  memories: string[]
+  memories: string[],
+  call?: import("../../core/calls.js").CallRequest
 ): Promise<number> {
   const description = `${params.mood} ${params.decade}s ${params.country || "world"} music, radio-ready instrumental`;
   console.log(`[request-line] Radiooooo exhausted, generating via Lyria: "${description}"`);
@@ -269,6 +300,8 @@ ${memories.length > 0 ? `Your memories:\n${memories.map(m => `- ${m}`).join("\n"
 You couldn't find a record for someone, so you fired up the AI generator to create something fresh.
 The vibe: ${description}
 
+${call ? `\nA listener just called in and said: "${call.text}"\nYou MUST respond to them in your commentary. Acknowledge what they said, and explain how this new generated track relates to their request.` : ""}
+
 Write a warm, brief introduction (2-3 sentences). Mention that this one was generated live just for the listeners.
 
 Respond with JSON:
@@ -283,16 +316,43 @@ Respond with JSON:
 
     const rendered = await renderSpeech(commentary, agent.voice);
 
-    // Apply fades to generated track
-    await applyFades(lyria.mp3Path, { fadeInSec: 1.5, fadeOutSec: 3.0 });
+    // Process Caller voice (if any)
+    let callerVoice: { wavPath: string; durationMs: number } | null = null;
+    if (call) {
+      callerVoice = await processCallVoice(call);
+    }
 
-    // Queue speech then track
-    await queueTrack("request-line", rendered.mp3Path);
-    await queueTrack("request-line", lyria.mp3Path, {
+    // Mix voices over track intro
+    const tmpDir = join(import.meta.dir, "..", "..", "..", ".tmp");
+    const finalMp3 = join(tmpDir, `request-fallback-final-${Date.now()}.mp3`);
+    
+    const voicesToMix: { path: string; delayMs?: number }[] = [];
+    let currentDelay = 2000;
+    
+    if (callerVoice) {
+      voicesToMix.push({ path: callerVoice.wavPath, delayMs: currentDelay });
+      currentDelay = 1500;
+    }
+    
+    voicesToMix.push({ path: rendered.mp3Path.replace(".mp3", ".wav"), delayMs: currentDelay });
+
+    console.log(`[request-line] Mixing voices over Lyria track...`);
+    await mixVoiceOverMusic(voicesToMix, lyria.mp3Path, finalMp3, {
       title: "Lyria Generation",
       artist: "Acephale Radio -- Lyria",
       genre: `${params.decade}s ${params.mood}`,
     });
+
+    // Cleanup temps
+    const { unlinkSync } = await import("node:fs");
+    try { unlinkSync(lyria.mp3Path); } catch {}
+    try { unlinkSync(rendered.mp3Path); } catch {}
+    if (callerVoice) {
+      try { unlinkSync(callerVoice.wavPath); } catch {}
+    }
+
+    // Queue speech then track
+    await queueTrack("request-line", finalMp3);
 
     setNowPlaying("request-line", {
       title: "Lyria Generation",
@@ -319,7 +379,7 @@ Respond with JSON:
       // Non-fatal
     }
 
-    const totalMs = rendered.durationMs + lyria.durationMs;
+    const totalMs = lyria.durationMs;
     const prepLeadMs = Math.min(30000, totalMs * 0.4);
     return Math.max(5000, totalMs - prepLeadMs);
   } catch (err) {
@@ -352,40 +412,9 @@ export async function runRequestLineLoop(): Promise<never> {
         try {
           const { saveCall } = await import("../../core/honcho.js");
           await saveCall("request-line", call.id, call.text);
-
-          const processed = await processCallWithLyriaUnderbed(call);
-          
-          // Queue the call to the stream
-          await queueTrack("request-line", processed.mp3Path, {
-            title: "Listener Call",
-            artist: "Anonymous",
-            album: "Acephale Radio",
-          });
-          
-          setNowPlaying("request-line", {
-            title: "Listener Call",
-            artist: "Anonymous",
-          });
-          
-          logArchiveEntry({
-            station: "request-line",
-            timestamp: Date.now(),
-            title: "Listener Call",
-            artist: "Anonymous",
-            duration: Math.round(processed.durationMs / 1000),
-          });
-          
-          callWaitMs = processed.durationMs + 2000;
-          handledCall = true;
         } catch (err) {
-          console.error(`[request-line] Failed to process call ${call.id}:`, err);
+          console.error(`[request-line] Failed to save call ${call.id}:`, err);
         }
-      }
-
-      // If we handled a call, we sleep for its duration before picking the next track
-      if (handledCall) {
-        console.log(`[request-line] Waiting ~${Math.round(callWaitMs / 1000)}s for call to finish playing...`);
-        await Bun.sleep(callWaitMs);
       }
 
       // Fetch memories
@@ -396,7 +425,8 @@ export async function runRequestLineLoop(): Promise<never> {
         // First run or Honcho unavailable
       }
 
-      const waitMs = await runAutopilotCycle(agent, memories);
+      // Pass the call directly into the autopilot cycle so it gets mixed over the track intro!
+      const waitMs = await runAutopilotCycle(agent, memories, call || undefined);
 
       cycleCount++;
       console.log(`[request-line] Cycle #${cycleCount}. Waiting ~${Math.round(waitMs / 1000)}s`);

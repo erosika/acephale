@@ -1,13 +1,14 @@
 import { join } from "node:path";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, unlinkSync } from "node:fs";
 import { loadAgentRoster, getStationAgents, loadSchedule, type ScheduleEvent } from "../../core/config.js";
 import { getGeminiFlash, generateStructured } from "../../core/gemini.js";
 import { synthesizeSpeech } from "../../core/tts.js";
-import { concatAudio, normalizeAudio, convertToMp3, applyFades, type AudioSegment } from "../../core/audio.js";
+import { concatAudio, normalizeAudio, convertToMp3, applyFades, mixVoiceOverMusic, type AudioSegment } from "../../core/audio.js";
 import { queueTrack } from "../../core/stream.js";
 import { setNowPlaying } from "../../core/nowplaying.js";
 import { logArchiveEntry } from "../../core/archive.js";
 import { generateLyriaAmbient, generateLyriaCustomTrack } from "../../core/lyria.js";
+import { processCallVoice, type CallRequest } from "../../core/calls.js";
 
 // --- Time & Mood ---
 
@@ -133,14 +134,14 @@ async function renderBleedEffect(type: string): Promise<{ mp3Path: string; durat
 async function runGeneratorCycle(
   agent: { name: string; voice: string; personality: string; honchoUser: string },
   schedule: ScheduleEvent[],
-  callContext?: string,
+  call?: CallRequest,
   memories?: string[]
 ): Promise<number> {
   const currentEvent = getCurrentScheduleEvent(schedule);
   console.log(`[static] Current block: ${currentEvent.label} (${currentEvent.mood})`);
 
   // Haunted frequencies check (skip if there's a real caller)
-  const bleedType = callContext ? null : getBleedEffect();
+  const bleedType = call ? null : getBleedEffect();
   let bleedDuration = 0;
   
   if (bleedType) {
@@ -151,24 +152,60 @@ async function runGeneratorCycle(
   }
 
   // Commentary
+  const callContext = call ? call.text : undefined;
   const commentary = await generateGeneratorCommentary(currentEvent, agent.name, agent.personality, callContext, memories);
+  
+  // Render DJ voice
   const renderedSpeech = await renderSpeech(commentary.text, agent.voice);
 
+  // Process Caller voice (if any)
+  let callerVoice: { wavPath: string; durationMs: number } | null = null;
+  if (call) {
+    callerVoice = await processCallVoice(call);
+  }
+
   // Music Generation
+  // If there's a caller, we extend the track length slightly so the ambient plays longer
+  const speechTotalMs = (callerVoice ? callerVoice.durationMs + 1000 : 0) + renderedSpeech.durationMs;
+  const trackLength = Math.max(90, Math.ceil(speechTotalMs / 1000) + 45); 
   const description = `${commentary.track_prompt}, highly atmospheric, slowly evolving, professional ambient soundscape`;
-  const trackLength = 90; // 1:30
   console.log(`[static] Generating ${trackLength}s Lyria track: "${description}"`);
   
   const lyria = await generateLyriaCustomTrack(description, trackLength);
   await applyFades(lyria.mp3Path, { fadeInSec: 3.0, fadeOutSec: 5.0 });
 
-  // Queue
-  await queueTrack("static", renderedSpeech.mp3Path);
-  await queueTrack("static", lyria.mp3Path, {
+  // Mix Caller and/or DJ over the music
+  const tmpDir = join(import.meta.dir, "..", "..", "..", ".tmp");
+  const finalMp3 = join(tmpDir, `generator-final-${Date.now()}.mp3`);
+  
+  const voicesToMix: { path: string; delayMs?: number }[] = [];
+  
+  // Let the track fade in for 2 seconds before anyone speaks
+  let currentDelay = 2000;
+  
+  if (callerVoice) {
+    voicesToMix.push({ path: callerVoice.wavPath, delayMs: currentDelay });
+    currentDelay = 1500; // Gap between caller and DJ
+  }
+  
+  voicesToMix.push({ path: renderedSpeech.mp3Path.replace(".mp3", ".wav"), delayMs: currentDelay }); // We saved it as .wav originally in renderSpeech
+
+  console.log(`[static] Mixing voice(s) over Lyria track...`);
+  await mixVoiceOverMusic(voicesToMix, lyria.mp3Path, finalMp3, {
     title: commentary.title || "Synthesized Atmosphere",
     artist: "The Generator",
     album: currentEvent.label,
   });
+
+  // Cleanup temps
+  try { unlinkSync(lyria.mp3Path); } catch {}
+  try { unlinkSync(renderedSpeech.mp3Path); } catch {}
+  if (callerVoice) {
+    try { unlinkSync(callerVoice.wavPath); } catch {}
+  }
+
+  // Queue
+  await queueTrack("static", finalMp3);
 
   setNowPlaying("request-line", {
     title: commentary.title || "Synthesized Atmosphere",
@@ -192,8 +229,8 @@ async function runGeneratorCycle(
     // Non-fatal
   }
 
-  // Calculate wait time to start generating next track before this one finishes
-  const totalMs = bleedDuration + renderedSpeech.durationMs + lyria.durationMs;
+  // Calculate wait time
+  const totalMs = bleedDuration + lyria.durationMs;
   const prepLeadMs = 30000; // start 30s before track ends
   return Math.max(5000, totalMs - prepLeadMs);
 }
@@ -215,45 +252,19 @@ export async function runStaticLoop(): Promise<never> {
 
   while (true) {
     try {
-      // 1. Process any calls in queue (using static/request-line fallback)
-      let callWaitMs = 0;
-      let handledCall = false;
+      // 1. Check for calls (using static/request-line fallback)
       const call = (await import("../../core/calls.js")).pickNextCall("request-line") || 
                    (await import("../../core/calls.js")).pickNextCall("static");
       
-      let callContext: string | undefined = undefined;
-
       if (call) {
-        console.log(`[static] Handling call: ${call.id}`);
+        console.log(`[static] Processing call from ${call.type === 'user_voice' ? 'real user' : 'AI'}...`);
         try {
           // Save the caller to Honcho as a peer on the "static" channel
           const { saveCall } = await import("../../core/honcho.js");
           await saveCall("static", call.id, call.text);
-
-          const processed = await (await import("../../core/calls.js")).processCallWithLyriaUnderbed(call);
-          
-          await queueTrack("static", processed.mp3Path, {
-            title: "Haunted Voicemail",
-            artist: "Anonymous",
-            album: "The Generator",
-          });
-          
-          setNowPlaying("request-line", {
-            title: "Haunted Voicemail",
-            artist: "Anonymous",
-          });
-          
-          callWaitMs = processed.durationMs + 2000;
-          handledCall = true;
-          callContext = call.text;
         } catch (err) {
-          console.error(`[static] Failed to process call ${call.id}:`, err);
+          console.error(`[static] Failed to save call to Honcho:`, err);
         }
-      }
-
-      if (handledCall) {
-        console.log(`[static] Waiting ~${Math.round(callWaitMs / 1000)}s for call to finish playing...`);
-        await Bun.sleep(callWaitMs);
       }
 
       // Fetch memories
@@ -265,7 +276,8 @@ export async function runStaticLoop(): Promise<never> {
         // First run or Honcho unavailable
       }
 
-      const waitMs = await runGeneratorCycle(agent, schedule, callContext, memories);
+      // The call is passed directly into the generator cycle where it will be mixed over the music
+      const waitMs = await runGeneratorCycle(agent, schedule, call || undefined, memories);
       
       cycleCount++;
       console.log(`[static] Cycle #${cycleCount}. Waiting ~${Math.round(waitMs / 1000)}s`);
