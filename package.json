@@ -8,14 +8,16 @@
     "crate": "bun run src/stations/crate-digger/loop.ts",
     "conspiracy": "bun run src/stations/conspiracy-hour/loop.ts",
     "request": "bun run src/stations/request-line/loop.ts",
+    "all": "bun run src/main.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@google/generative-ai": "latest",
+    "@elysiajs/static": "^1.4.7",
     "@google-cloud/text-to-speech": "latest",
+    "@google/generative-ai": "latest",
     "@honcho-ai/sdk": "latest",
-    "elysia": "latest",
-    "croner": "latest"
+    "croner": "latest",
+    "elysia": "latest"
   },
   "devDependencies": {
     "typescript": "latest",
