@@ -114,22 +114,28 @@ const app = new Elysia()
     },
     async close(ws) {
       const data = ws.data as any;
-      if (data.chunks && data.chunks.length > 0) {
-        try {
-          const audioBuf = Buffer.concat(data.chunks);
-          console.log(`[ws] Received voice call for ${data.station} (${audioBuf.length} bytes), transcribing...`);
-          const model = getGeminiFlash();
-          // The frontend sends standard audio/webm
-          const text = await transcribeAudio(model, audioBuf, "audio/webm");
-          console.log(`[ws] Transcribed: "${text}"`);
-          if (text && text !== "[silence]") {
-            addCall(data.station, text, "user_voice", audioBuf);
-          }
-        } catch (err) {
-          console.error("[ws] Voice call processing failed:", err);
+    console.log(`[ws] User finished recording. Concatenating ${data.chunks.length} chunks...`);
+    if (data.chunks && data.chunks.length > 0) {
+      try {
+        const audioBuf = Buffer.concat(data.chunks);
+        console.log(`[ws] Received voice call for ${data.station} (${audioBuf.length} bytes), sending to Gemini for transcription...`);
+        const model = getGeminiFlash();
+        // The frontend sends standard audio/webm
+        const text = await transcribeAudio(model, audioBuf, "audio/webm");
+        console.log(`[ws] Transcribed text: "${text}"`);
+        if (text && text !== "[silence]") {
+          const callId = addCall(data.station, text, "user_voice", audioBuf);
+          console.log(`[ws] Call ${callId} fully registered to queue.`);
+        } else {
+          console.log(`[ws] Dropping call: Transcribed as silence or empty.`);
         }
+      } catch (err) {
+        console.error("[ws] Voice call processing failed:", err);
       }
+    } else {
+      console.log(`[ws] No audio chunks received from frontend.`);
     }
+  }
   })
 
   // Proxy Icecast streams so browser stays on same origin (no CORS issues)

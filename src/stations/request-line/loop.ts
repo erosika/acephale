@@ -421,10 +421,11 @@ export async function runRequestLineLoop(): Promise<never> {
       let memories: string[] = [];
       try {
         memories = await getAgentMemory(agent.honchoUser);
-      } catch {
-        // First run or Honcho unavailable
+      } catch (err) {
+        console.log(`[request-line] Failed to fetch memories:`, err);
       }
 
+      console.log(`[request-line] Starting autopilot cycle. Call context present: ${!!call}`);
       // Pass the call directly into the autopilot cycle so it gets mixed over the track intro!
       const waitMs = await runAutopilotCycle(agent, memories, call || undefined);
 

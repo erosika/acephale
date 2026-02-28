@@ -272,10 +272,11 @@ export async function runStaticLoop(): Promise<never> {
       try {
         const { getAgentMemory } = await import("../../core/honcho.js");
         memories = await getAgentMemory(agent.honchoUser);
-      } catch {
-        // First run or Honcho unavailable
+      } catch (err) {
+        console.log(`[static] Failed to fetch memories:`, err);
       }
 
+      console.log(`[static] Starting generator cycle. Call context present: ${!!call}`);
       // The call is passed directly into the generator cycle where it will be mixed over the music
       const waitMs = await runGeneratorCycle(agent, schedule, call || undefined, memories);
       
