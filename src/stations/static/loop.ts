@@ -40,7 +40,7 @@ async function generateGeneratorCommentary(
   event: ScheduleEvent,
   agentName: string,
   personality: string
-): Promise<{ text: string }> {
+): Promise<{ text: string; title: string }> {
   const model = getGeminiFlash();
   const prompt = `You are ${agentName}, the voice of "The Generator" (a sentient AI radio station powered by Lyria) on Acephale Radio.
 Personality: ${personality}
@@ -50,9 +50,12 @@ The current atmospheric mood is: "${event.mood}" (Block: ${event.label})
 Write a brief introduction (2-3 sentences) describing the music you are about to synthesize. 
 Instead of being vague, talk explicitly about the generative process, Lyria as the underlying architecture, how the models are "interpreting" the mood, or how the parameters (temperature, density, structure) are being tuned for this specific moment. Sound like an AI that is self-aware of its own creative engineering.
 
+Also provide a short 2-5 word abstract title for the audio track being generated.
+
 Respond with JSON:
 {
-  "text": "your narration"
+  "text": "your narration",
+  "title": "Abstract Track Title"
 }`;
 
   return generateStructured(model, prompt, (raw) => JSON.parse(raw));
@@ -154,13 +157,13 @@ async function runGeneratorCycle(
   // Queue
   await queueTrack("static", renderedSpeech.mp3Path);
   await queueTrack("static", lyria.mp3Path, {
-    title: "Synthesized Atmosphere",
+    title: commentary.title || "Synthesized Atmosphere",
     artist: "The Generator",
     album: currentEvent.label,
   });
 
   setNowPlaying("request-line", {
-    title: "Synthesized Atmosphere",
+    title: commentary.title || "Synthesized Atmosphere",
     artist: "The Generator",
     album: currentEvent.label,
   });
@@ -168,7 +171,7 @@ async function runGeneratorCycle(
   logArchiveEntry({
     station: "request-line", // writing to request-line for now
     timestamp: Date.now(),
-    title: "Synthesized Atmosphere",
+    title: commentary.title || "Synthesized Atmosphere",
     artist: "The Generator",
     duration: Math.round(lyria.durationMs / 1000),
   });
