@@ -44,7 +44,7 @@ export async function generateEpisode(): Promise<EpisodeResult> {
   console.log(`[morning-zoo] Gathered ${sources.length} content sources`);
 
   // 4. Generate script
-  const script = await generateScript(hostsWithMemory, sources, 12);
+  const script = await generateScript(hostsWithMemory, sources, 16);
   console.log(`[morning-zoo] Script: "${script.title}" (${script.lines.length} lines)`);
 
   // 5. Render audio

@@ -128,14 +128,23 @@ export async function mixVoiceOverMusic(
   const segments: AudioSegment[] = [];
   for (let i = 0; i < voiceWavs.length; i++) {
     const v = voiceWavs[i];
-    const { readFileSync } = await import("node:fs");
+    const { readFileSync, existsSync } = await import("node:fs");
     if (v.delayMs && v.delayMs > 0) {
       const silPath = join(tmpDir, `sil-${stamp}-${i}.wav`);
       await generateSilence(v.delayMs, silPath);
-      segments.push({ audio: readFileSync(silPath) });
+      
+      // Safety check to avoid ENOENT crashes during fast concurrent generation
+      if (existsSync(silPath)) {
+        segments.push({ audio: readFileSync(silPath) });
+      }
       try { unlinkSync(silPath); } catch {}
     }
-    segments.push({ audio: readFileSync(v.path) });
+    
+    if (existsSync(v.path)) {
+      segments.push({ audio: readFileSync(v.path) });
+    } else {
+      console.warn(`[audio] WARNING: voice track missing at ${v.path}, skipping in mix`);
+    }
   }
 
   const combinedVoiceWav = join(tmpDir, `combined-voice-${stamp}.wav`);

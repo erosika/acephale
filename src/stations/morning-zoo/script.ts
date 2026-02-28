@@ -48,7 +48,8 @@ ${sourceBlock}
 - They should reference other stations on Acephale Radio (Crate Digger, Conspiracy Hour, Request Line)
 - They might plan or discuss pranks on other DJs
 - Keep each line conversational (1-3 sentences max)
-- Include moments where one host introduces a song: "[MUSIC: artist - title, decade, country]"
+- Include 2-3 moments where a host introduces a song: "[MUSIC: artist - title, 1960s, FRA]" (3-letter country code, decade with 's' suffix)
+- The music line must be its OWN line with ONLY the [MUSIC:] tag as text. The host's intro ("let me play you something...") goes in the preceding line.
 
 Respond with JSON:
 {

@@ -270,10 +270,9 @@ async function runTrackCycle(
     // Non-fatal
   }
 
-  // Return wait time -- start prepping next before current ends (no dead air)
+    // Return wait time -- start prepping next before current ends (no dead air)
   const totalMs = (track.length || 180) * 1000;
-  const prepLeadMs = Math.min(30000, totalMs * 0.4);
-  return Math.max(5000, totalMs - prepLeadMs);
+  return totalMs;
 }
 
 // --- Lyria Fallback ---
@@ -380,8 +379,7 @@ Respond with JSON:
     }
 
     const totalMs = lyria.durationMs;
-    const prepLeadMs = Math.min(30000, totalMs * 0.4);
-    return Math.max(5000, totalMs - prepLeadMs);
+    return totalMs;
   } catch (err) {
     console.error("[request-line] Lyria fallback failed:", err);
     return 10000;
@@ -429,9 +427,12 @@ export async function runRequestLineLoop(): Promise<never> {
       // Pass the call directly into the autopilot cycle so it gets mixed over the track intro!
       const waitMs = await runAutopilotCycle(agent, memories, call || undefined);
 
+      const prepLeadMs = Math.min(30000, waitMs * 0.4);
+      const sleepMs = Math.max(5000, waitMs - prepLeadMs);
+
       cycleCount++;
-      console.log(`[request-line] Cycle #${cycleCount}. Waiting ~${Math.round(waitMs / 1000)}s`);
-      await Bun.sleep(waitMs);
+      console.log(`[request-line] Cycle #${cycleCount} queued. Waiting ~${Math.round(sleepMs / 1000)}s`);
+      await Bun.sleep(sleepMs);
 
     } catch (err) {
       console.error("[request-line] Loop error:", err);

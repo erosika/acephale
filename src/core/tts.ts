@@ -151,12 +151,22 @@ export async function synthesizeSpeech(
   voiceName: string,
   options?: SynthesisOptions
 ): Promise<SynthesisResult> {
-  try {
-    return await geminiTTS(text, voiceName, options);
-  } catch (err) {
-    console.log(`[tts] Gemini TTS failed (${String(err).slice(0, 120)}), using local macOS fallback`);
-    return localTTS(text, voiceName, options);
+  const MAX_RETRIES = 2;
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      return await geminiTTS(text, voiceName, options);
+    } catch (err) {
+      if (attempt < MAX_RETRIES) {
+        const delayMs = 1000 * (attempt + 1);
+        console.log(`[tts] Gemini TTS attempt ${attempt + 1} failed, retrying in ${delayMs}ms...`);
+        await new Promise((r) => setTimeout(r, delayMs));
+      } else {
+        console.log(`[tts] Gemini TTS failed after ${MAX_RETRIES + 1} attempts (${String(err).slice(0, 120)}), using local macOS fallback`);
+        return localTTS(text, voiceName, options);
+      }
+    }
   }
+  return localTTS(text, voiceName, options);
 }
 
 export function getVoiceProfile(
