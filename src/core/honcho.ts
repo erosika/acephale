@@ -11,34 +11,27 @@ export function getHonchoClient(): Honcho {
     client = new Honcho({
       apiKey: getEnv("HONCHO_API_KEY"),
       baseURL: getEnv("HONCHO_BASE_URL", "https://api.honcho.dev/v3"),
-      workspaceId: "acephale-radio",
+      workspaceId: "acephale",
     });
   }
   return client;
 }
 
-// --- Shift Sessions ---
-// Each station maintains one session per "shift" (boot cycle).
-// All activity within a shift accumulates as messages in that session,
-// giving Honcho a continuous view of the DJ's work.
+// --- Channel Sessions ---
+// Each channel has exactly one persistent session. Session names are stable
+// (no timestamps, no boot-cycle IDs) so every mic break, dig, monologue,
+// and episode accumulates in the same long-running session.
 
-const shiftSessions: Record<string, { session: Session; peers: Record<string, Peer> }> = {};
+const channels: Record<string, { session: Session; peers: Record<string, Peer> }> = {};
 
-async function getOrCreateShift(
-  station: string,
+async function getChannel(
+  channel: string,
   peerIds: string[]
 ): Promise<{ session: Session; peers: Record<string, Peer> }> {
-  if (shiftSessions[station]) return shiftSessions[station];
+  if (channels[channel]) return channels[channel];
 
   const honcho = getHonchoClient();
-  const shiftId = `shift-${station}-${Date.now()}`;
-  const session = await honcho.session(shiftId, {
-    metadata: {
-      type: "shift",
-      station,
-      startedAt: new Date().toISOString(),
-    },
-  });
+  const session = await honcho.session(channel);
 
   const peers: Record<string, Peer> = {};
   for (const id of peerIds) {
@@ -47,8 +40,8 @@ async function getOrCreateShift(
     await session.addPeers(peer);
   }
 
-  shiftSessions[station] = { session, peers };
-  return shiftSessions[station];
+  channels[channel] = { session, peers };
+  return channels[channel];
 }
 
 // --- Agent Memory ---
@@ -77,13 +70,13 @@ export async function getAgentMemory(
 
 // --- Station-Specific Memory ---
 
-// Crate Digger: one shift session, each dig is a message pair (commentary + track)
+// Crate Digger: each dig is a message pair (commentary + track)
 export async function saveDig(
   peerId: string,
   commentary: string,
   track: { title: string; artist: string; year: string; country: string; decade: string; mood: string }
 ): Promise<void> {
-  const { session, peers } = await getOrCreateShift("crate-digger", [peerId]);
+  const { session, peers } = await getChannel("crate-digger", [peerId]);
   const peer = peers[peerId];
   await session.addMessages([
     peer.message(commentary),
@@ -91,13 +84,13 @@ export async function saveDig(
   ]);
 }
 
-// Conspiracy Hour: one shift session, monologues + accusations accumulate
+// Conspiracy Hour: monologues + accusations accumulate
 export async function saveMonologue(
   peerId: string,
   monologue: string,
   meta: { mood: string; paranoia: number; thread?: string; accusations?: Array<{ target: string; claim: string }> }
 ): Promise<void> {
-  const { session, peers } = await getOrCreateShift("conspiracy-hour", [peerId]);
+  const { session, peers } = await getChannel("conspiracy-hour", [peerId]);
   const peer = peers[peerId];
 
   const messages = [
@@ -115,13 +108,13 @@ export async function saveMonologue(
   await session.addMessages(messages);
 }
 
-// Request Line: one shift session, autopilot picks accumulate
+// Request Line: autopilot picks accumulate
 export async function saveRequestLineCycle(
   peerId: string,
   commentary: string,
   track: { title: string; artist: string; year: string; country: string }
 ): Promise<void> {
-  const { session, peers } = await getOrCreateShift("request-line", [peerId]);
+  const { session, peers } = await getChannel("request-line", [peerId]);
   const djPeer = peers[peerId];
 
   const messages = [
@@ -132,31 +125,26 @@ export async function saveRequestLineCycle(
   await session.addMessages(messages);
 }
 
-// Morning Zoo: one session per episode, both hosts as separate peers
+// Morning Zoo: both hosts share the same persistent session
 export async function saveZooEpisode(
   peerMap: Record<string, string>,
   episodeTitle: string,
   topic: string,
   transcript: Array<{ speaker: string; text: string }>
 ): Promise<void> {
-  const honcho = getHonchoClient();
-  const sessionId = `zoo-episode-${Date.now()}`;
-  const session = await honcho.session(sessionId, {
-    metadata: { type: "episode", station: "morning-zoo", episodeTitle, topic },
-  });
+  const allPeerIds = [...new Set(Object.values(peerMap))];
+  const { session, peers: channelPeers } = await getChannel("morning-zoo", allPeerIds);
 
-  const peers: Record<string, Peer> = {};
+  // Build speaker→peer lookup from the channel's resolved peers
+  const speakerPeers: Record<string, Peer> = {};
   for (const [speakerName, peerId] of Object.entries(peerMap)) {
-    if (!peers[speakerName]) {
-      peers[speakerName] = await honcho.peer(peerId);
-      await session.addPeers(peers[speakerName]);
-    }
+    speakerPeers[speakerName] = channelPeers[peerId];
   }
 
   const messages = transcript.map((line) => {
-    const peer = peers[line.speaker];
+    const peer = speakerPeers[line.speaker];
     if (!peer) {
-      return Object.values(peers)[0].message(`[${line.speaker}] ${line.text}`);
+      return Object.values(speakerPeers)[0].message(`[${line.speaker}] ${line.text}`);
     }
     return peer.message(line.text);
   });
@@ -165,4 +153,5 @@ export async function saveZooEpisode(
 
 export function _resetHoncho(): void {
   client = null;
+  for (const key of Object.keys(channels)) delete channels[key];
 }

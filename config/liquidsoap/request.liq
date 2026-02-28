@@ -4,7 +4,12 @@ settings.server.telnet.port.set(1237)
 settings.server.telnet.bind_addr.set("0.0.0.0")
 
 queue = request.queue(id="request_queue")
-music = mksafe(queue)
+
+# Faint hiss between tracks -- keeps the stream alive
+static = noise(duration=0.0)
+static = amplify(0.01, static)
+
+music = mksafe(fallback(track_sensitive=false, [queue, static]))
 
 output.icecast(
   %mp3(bitrate=192),

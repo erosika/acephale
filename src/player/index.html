@@ -75,9 +75,12 @@
   </div>
 
   <script>
-    let audio = null;
+    // --- All streams stay alive, switching just mutes/unmutes ---
+    const MOUNTS = { 'morning-zoo': 'zoo', 'crate-digger': 'crate', 'conspiracy-hour': 'conspiracy', 'request-line': 'request' };
+    const streams = {};  // mount -> Audio
     let currentStation = 'crate-digger';
     let currentMount = 'crate';
+    let userHasInteracted = false;
 
     const volumeSlider = document.getElementById('volume');
     const statusText = document.querySelector('.status-text');
@@ -88,70 +91,72 @@
     const unmuteBtn = document.getElementById('unmute-btn');
 
     function streamUrl(mount) {
-      // Direct Icecast URL -- no CORS issues for <audio> element playback
       return `http://${location.hostname}:8000/${mount}`;
     }
 
-    let userHasInteracted = false;
-    let reconnectTimer = null;
+    // Create and start all 4 streams (muted except active)
+    function initStreams() {
+      for (const [station, mount] of Object.entries(MOUNTS)) {
+        if (streams[mount]) continue;
+        const a = new Audio(streamUrl(mount));
+        a.volume = 0;
+        a.preload = 'none';
+        streams[mount] = a;
 
-    function tuneIn(mount) {
-      if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
-      if (audio) {
-        audio.pause();
-        audio.src = '';
-        audio = null;
+        a.addEventListener('error', () => {
+          console.error(`[radio] ${mount} stream error, reconnecting...`);
+          setTimeout(() => {
+            a.src = streamUrl(mount);
+            a.load();
+            if (userHasInteracted) a.play().catch(() => {});
+          }, 5000);
+        });
       }
-      currentMount = mount;
-      const url = streamUrl(mount);
-      console.log(`[radio] Tuning to ${url}`);
-      audio = new Audio(url);
-      audio.volume = volumeSlider.value / 100;
-
-      audio.addEventListener('playing', () => {
-        console.log('[radio] Stream active');
-        // Cancel any pending reconnect -- stream is working
-        if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
-        const name = document.querySelector('.station.active .station-name').textContent;
-        statusText.textContent = `ON AIR \u2014 ${name.toUpperCase()}`;
-      });
-
-      audio.addEventListener('waiting', () => {
-        statusText.textContent = 'BUFFERING...';
-      });
-
-      audio.addEventListener('error', () => {
-        const err = audio?.error;
-        console.error(`[radio] Error: code=${err?.code} ${err?.message}`);
-        if (!userHasInteracted) return;
-        // Only reconnect if not already playing
-        if (audio && audio.readyState >= 2) return;
-        statusText.textContent = 'SIGNAL LOST -- RECONNECTING...';
-        if (!reconnectTimer) {
-          reconnectTimer = setTimeout(() => { reconnectTimer = null; tuneIn(currentMount); }, 5000);
-        }
-      });
-
-      audio.play().then(() => {
-        console.log('[radio] play() OK');
-        userHasInteracted = true;
-        unmuteOverlay.classList.add('hidden');
-      }).catch(err => {
-        console.warn(`[radio] Autoplay blocked, waiting for user gesture`);
-        if (!userHasInteracted) {
-          unmuteOverlay.classList.remove('hidden');
-        }
-      });
     }
 
-    // Unmute overlay -- one click, then radio stays on forever
+    function startAll() {
+      const vol = volumeSlider.value / 100;
+      for (const [mount, a] of Object.entries(streams)) {
+        a.volume = mount === currentMount ? vol : 0;
+        a.play().catch(() => {});
+      }
+    }
+
+    function tuneIn(mount) {
+      const vol = volumeSlider.value / 100;
+      currentMount = mount;
+
+      // Instant switch: unmute target, mute others
+      for (const [m, a] of Object.entries(streams)) {
+        a.volume = m === mount ? vol : 0;
+      }
+
+      const active = streams[mount];
+      if (active) {
+        const name = document.querySelector('.station.active .station-name')?.textContent || mount;
+        if (active.readyState >= 2) {
+          statusText.textContent = `ON AIR \u2014 ${name.toUpperCase()}`;
+        } else {
+          statusText.textContent = 'BUFFERING...';
+          active.addEventListener('playing', () => {
+            if (currentMount === mount) {
+              statusText.textContent = `ON AIR \u2014 ${name.toUpperCase()}`;
+            }
+          }, { once: true });
+        }
+      }
+    }
+
+    // Unmute overlay
     unmuteBtn.addEventListener('click', () => {
       userHasInteracted = true;
       unmuteOverlay.classList.add('hidden');
+      initStreams();
+      startAll();
       tuneIn(currentMount);
     });
 
-    // Station switching
+    // Station switching -- instant, no teardown
     stationBtns.forEach(btn => {
       btn.addEventListener('click', () => {
         currentStation = btn.dataset.station;
@@ -159,16 +164,19 @@
         btn.classList.add('active');
         tuneIn(btn.dataset.mount);
         fetchHistory();
+        fetchNowPlaying();
       });
     });
 
     // Volume
     volumeSlider.addEventListener('input', () => {
-      if (audio) audio.volume = volumeSlider.value / 100;
+      const vol = volumeSlider.value / 100;
+      const active = streams[currentMount];
+      if (active) active.volume = vol;
     });
 
     // Now-playing polling
-    let npInterval = setInterval(() => {
+    setInterval(() => {
       fetchNowPlaying();
       fetchHistory();
     }, 8000);
@@ -210,7 +218,8 @@
       }
     }
 
-    // Boot -- show overlay, start polling
+    // Boot
+    initStreams();
     fetchNowPlaying();
     fetchHistory();
     unmuteOverlay.classList.remove('hidden');

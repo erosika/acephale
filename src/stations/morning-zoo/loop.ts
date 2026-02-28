@@ -82,22 +82,25 @@ export async function runLoop(): Promise<void> {
   console.log(`[morning-zoo] Starting episode loop (interval: ${intervalMinutes}min)`);
 
   let episodeCount = 0;
+  let consecutiveFailures = 0;
 
   while (true) {
     try {
       const result = await generateEpisode();
       await queueEpisode(result);
       episodeCount++;
+      consecutiveFailures = 0;
 
-      // Wait for episode to play + interval gap, start prepping next before gap ends
-      const totalMs = result.rendered.durationMs + (intervalMinutes * 60 * 1000);
-      const prepLeadMs = Math.min(30000, totalMs * 0.3);
-      const waitMs = Math.max(5000, totalMs - prepLeadMs);
-      console.log(`[morning-zoo] Episode #${episodeCount} queued. Next prep in ~${Math.round(waitMs / 1000)}s`);
+      // Start prepping next episode before this one finishes -- no dead air
+      const prepLeadMs = Math.min(30000, result.rendered.durationMs * 0.4);
+      const waitMs = Math.max(5000, result.rendered.durationMs - prepLeadMs);
+      console.log(`[morning-zoo] Episode #${episodeCount} queued (~${Math.round(result.rendered.durationMs / 1000)}s). Next prep in ~${Math.round(waitMs / 1000)}s`);
       await Bun.sleep(waitMs);
     } catch (err) {
-      console.error(`[morning-zoo] Episode generation failed:`, err);
-      await Bun.sleep(15000);
+      consecutiveFailures++;
+      const backoffMs = Math.min(5 * 60_000, 30_000 * consecutiveFailures);
+      console.error(`[morning-zoo] Episode generation failed (attempt ${consecutiveFailures}, retry in ${Math.round(backoffMs / 1000)}s):`, err);
+      await Bun.sleep(backoffMs);
     }
   }
 }

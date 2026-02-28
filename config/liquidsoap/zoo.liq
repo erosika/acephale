@@ -3,11 +3,13 @@ settings.server.telnet.set(true)
 settings.server.telnet.port.set(1234)
 settings.server.telnet.bind_addr.set("0.0.0.0")
 
-episodes = playlist("/episodes", mode="normal", reload_mode="watch")
 queue = request.queue(id="zoo_queue")
 
-radio = fallback([queue, episodes])
-radio = mksafe(radio)
+# Faint hiss as fallback -- no dead air, no stale replays
+static = noise(duration=0.0)
+static = amplify(0.01, static)
+
+radio = mksafe(fallback(track_sensitive=false, [queue, static]))
 
 output.icecast(
   %mp3(bitrate=192),

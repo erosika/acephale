@@ -1,3 +1,4 @@
+import { GoogleGenAI } from "@google/genai";
 import { join } from "node:path";
 import { mkdirSync, readFileSync, unlinkSync } from "node:fs";
 import { getEnv } from "./config.js";
@@ -15,63 +16,90 @@ export type SynthesisResult = {
   durationMs: number;
 };
 
-// --- Google Cloud TTS (Chirp 3 HD) ---
+// --- Voice name normalization ---
+// Accepts both "en-US-Chirp3-HD-Aoede" and "Aoede"
 
-async function googleTTS(
+function shortVoiceName(voice: string): string {
+  const parts = voice.split("-");
+  return parts[parts.length - 1];
+}
+
+// --- WAV header for raw PCM (24kHz mono 16-bit) ---
+
+function wrapPcmAsWav(pcm: Buffer): Buffer {
+  const header = Buffer.alloc(44);
+  const dataSize = pcm.length;
+  const fileSize = 36 + dataSize;
+
+  header.write("RIFF", 0);
+  header.writeUInt32LE(fileSize, 4);
+  header.write("WAVE", 8);
+  header.write("fmt ", 12);
+  header.writeUInt32LE(16, 16);       // fmt chunk size
+  header.writeUInt16LE(1, 20);        // PCM format
+  header.writeUInt16LE(1, 22);        // mono
+  header.writeUInt32LE(24000, 24);    // sample rate
+  header.writeUInt32LE(48000, 28);    // byte rate (24000 * 1 * 2)
+  header.writeUInt16LE(2, 32);        // block align
+  header.writeUInt16LE(16, 34);       // bits per sample
+  header.write("data", 36);
+  header.writeUInt32LE(dataSize, 40);
+
+  return Buffer.concat([header, pcm]);
+}
+
+// --- Gemini TTS (gemini-2.5-flash-preview-tts) ---
+
+let genai: GoogleGenAI | null = null;
+
+function getGenAI(): GoogleGenAI {
+  if (!genai) {
+    genai = new GoogleGenAI({ apiKey: getEnv("GEMINI_API_KEY") });
+  }
+  return genai;
+}
+
+async function geminiTTS(
   text: string,
   voiceName: string,
-  options?: SynthesisOptions
+  _options?: SynthesisOptions
 ): Promise<SynthesisResult> {
-  const apiKey = getEnv("GOOGLE_TTS_API_KEY", process.env.GEMINI_API_KEY);
-  const url = `https://texttospeech.googleapis.com/v1/text:synthesize?key=${apiKey}`;
+  const ai = getGenAI();
 
-  const input = options?.ssml
-    ? { ssml: text }
-    : { text };
-
-  const body = {
-    input,
-    voice: {
-      languageCode: voiceName.slice(0, 5),
-      name: voiceName,
+  const response = await ai.models.generateContent({
+    model: "gemini-2.5-flash-preview-tts",
+    contents: [{ parts: [{ text }] }],
+    config: {
+      responseModalities: ["AUDIO"],
+      speechConfig: {
+        voiceConfig: {
+          prebuiltVoiceConfig: { voiceName: shortVoiceName(voiceName) },
+        },
+      },
     },
-    audioConfig: {
-      audioEncoding: "LINEAR16",
-      sampleRateHertz: 24000,
-      speakingRate: options?.speakingRate ?? 1.0,
-      pitch: options?.pitch ?? 0,
-    },
-  };
-
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
   });
 
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`TTS failed (${res.status}): ${err}`);
-  }
+  const data = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+  if (!data) throw new Error("TTS: no audio data in response");
 
-  const json = (await res.json()) as { audioContent: string };
-  const audio = Buffer.from(json.audioContent, "base64");
+  const pcm = Buffer.from(data, "base64");
+  const audio = wrapPcmAsWav(pcm);
 
-  // Estimate duration: LINEAR16 = 24000 samples/sec * 2 bytes/sample
+  // PCM 24kHz mono 16-bit
   const bytesPerSecond = 24000 * 2;
-  const durationMs = Math.round((audio.length / bytesPerSecond) * 1000);
+  const durationMs = Math.round((pcm.length / bytesPerSecond) * 1000);
 
   return { audio, durationMs };
 }
 
 // --- macOS Local TTS Fallback ---
 
-const VOICE_MAP: Record<string, string> = {
-  "en-US-Chirp3-HD-Aoede": "Samantha",
-  "en-US-Chirp3-HD-Leda": "Karen",
-  "en-US-Chirp3-HD-Puck": "Daniel",
-  "en-US-Chirp3-HD-Charon": "Tom",
-  "en-US-Chirp3-HD-Kore": "Moira",
+const MAC_VOICE_MAP: Record<string, string> = {
+  Aoede: "Samantha",
+  Leda: "Karen",
+  Puck: "Daniel",
+  Charon: "Tom",
+  Kore: "Moira",
 };
 
 async function localTTS(
@@ -86,7 +114,8 @@ async function localTTS(
   const aiffPath = join(tmpDir, `tts-${ts}.aiff`);
   const wavPath = join(tmpDir, `tts-${ts}.wav`);
 
-  const macVoice = VOICE_MAP[voiceName] || "Samantha";
+  const short = shortVoiceName(voiceName);
+  const macVoice = MAC_VOICE_MAP[short] || "Samantha";
   const rate = Math.round((options?.speakingRate ?? 1.0) * 200);
 
   // macOS say -> AIFF
@@ -106,7 +135,6 @@ async function localTTS(
 
   const audio = readFileSync(wavPath);
 
-  // Cleanup
   try { unlinkSync(aiffPath); } catch { /* ignore */ }
   try { unlinkSync(wavPath); } catch { /* ignore */ }
 
@@ -116,7 +144,7 @@ async function localTTS(
   return { audio: Buffer.from(audio), durationMs };
 }
 
-// --- Public API (auto-fallback) ---
+// --- Public API (Gemini first, macOS fallback) ---
 
 export async function synthesizeSpeech(
   text: string,
@@ -124,14 +152,10 @@ export async function synthesizeSpeech(
   options?: SynthesisOptions
 ): Promise<SynthesisResult> {
   try {
-    return await googleTTS(text, voiceName, options);
+    return await geminiTTS(text, voiceName, options);
   } catch (err) {
-    const msg = String(err);
-    if (msg.includes("403") || msg.includes("SERVICE_DISABLED") || msg.includes("PERMISSION_DENIED")) {
-      console.log("[tts] Google Cloud TTS unavailable, using local macOS fallback");
-      return localTTS(text, voiceName, options);
-    }
-    throw err;
+    console.log(`[tts] Gemini TTS failed (${String(err).slice(0, 120)}), using local macOS fallback`);
+    return localTTS(text, voiceName, options);
   }
 }
 

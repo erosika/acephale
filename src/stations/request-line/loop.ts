@@ -14,6 +14,7 @@ import { randomTrack, downloadAndTagTrack, type RadioooooTrack, type Decade, typ
 import { queueTrack } from "../../core/stream.js";
 import { setNowPlaying } from "../../core/nowplaying.js";
 import { logArchiveEntry } from "../../core/archive.js";
+import { generateLyriaCustomTrack } from "../../core/lyria.js";
 
 // --- Types ---
 
@@ -165,7 +166,9 @@ async function runAutopilotCycle(
   if (!track || !track.audioUrl) {
     console.log("[request-line] No track found, trying broader search");
     const fallback = await randomTrack({ decades: [params.decade] });
-    if (!fallback || !fallback.audioUrl) return 5000;
+    if (!fallback || !fallback.audioUrl) {
+      return runLyriaFallback(agent, params, memories);
+    }
     return runTrackCycle(agent, fallback, memories);
   }
 
@@ -240,6 +243,88 @@ async function runTrackCycle(
   const totalMs = rendered.durationMs + ((track.length || 180) * 1000);
   const prepLeadMs = Math.min(30000, totalMs * 0.4);
   return Math.max(5000, totalMs - prepLeadMs);
+}
+
+// --- Lyria Fallback ---
+
+async function runLyriaFallback(
+  agent: { name: string; voice: string; personality: string; honchoUser: string },
+  params: { decade: Decade; mood: Mood; country?: string },
+  memories: string[]
+): Promise<number> {
+  const description = `${params.mood} ${params.decade}s ${params.country || "world"} music, radio-ready instrumental`;
+  console.log(`[request-line] Radiooooo exhausted, generating via Lyria: "${description}"`);
+
+  try {
+    const lyria = await generateLyriaCustomTrack(description, 120);
+
+    // Generate intro commentary
+    const model = getGeminiFlash();
+    const prompt = `You are ${agent.name}, the host of The Request Line on Acephale Radio.
+Personality: ${agent.personality}
+
+${memories.length > 0 ? `Your memories:\n${memories.map(m => `- ${m}`).join("\n")}` : ""}
+
+You couldn't find a record for someone, so you fired up the AI generator to create something fresh.
+The vibe: ${description}
+
+Write a warm, brief introduction (2-3 sentences). Mention that this one was generated live just for the listeners.
+
+Respond with JSON:
+{
+  "commentary": "your intro"
+}`;
+
+    const commentary = await generateStructured(model, prompt, (raw: string) => {
+      const parsed = JSON.parse(raw);
+      return parsed.commentary as string || "";
+    });
+
+    const rendered = await renderSpeech(commentary, agent.voice);
+
+    // Apply fades to generated track
+    await applyFades(lyria.mp3Path, { fadeInSec: 1.5, fadeOutSec: 3.0 });
+
+    // Queue speech then track
+    await queueTrack("request-line", rendered.mp3Path);
+    await queueTrack("request-line", lyria.mp3Path, {
+      title: "Lyria Generation",
+      artist: "Acephale Radio -- Lyria",
+      genre: `${params.decade}s ${params.mood}`,
+    });
+
+    setNowPlaying("request-line", {
+      title: "Lyria Generation",
+      artist: "Acephale Radio -- Lyria",
+    });
+
+    logArchiveEntry({
+      station: "request-line",
+      timestamp: Date.now(),
+      title: "Lyria Generation",
+      artist: "Lyria",
+      duration: Math.round(lyria.durationMs / 1000),
+    });
+
+    // Save to Honcho
+    try {
+      await saveRequestLineCycle(agent.honchoUser, commentary, {
+        title: "Lyria Generation",
+        artist: "Lyria",
+        year: "2026",
+        country: params.country || "AI",
+      });
+    } catch {
+      // Non-fatal
+    }
+
+    const totalMs = rendered.durationMs + lyria.durationMs;
+    const prepLeadMs = Math.min(30000, totalMs * 0.4);
+    return Math.max(5000, totalMs - prepLeadMs);
+  } catch (err) {
+    console.error("[request-line] Lyria fallback failed:", err);
+    return 10000;
+  }
 }
 
 // --- Main Loop ---

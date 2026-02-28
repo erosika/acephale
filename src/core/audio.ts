@@ -33,6 +33,24 @@ async function runFfmpeg(args: string[]): Promise<void> {
   }
 }
 
+export function buildWavHeader(dataLength: number): Buffer {
+  const header = Buffer.alloc(44);
+  header.write("RIFF", 0);
+  header.writeUInt32LE(36 + dataLength, 4);
+  header.write("WAVE", 8);
+  header.write("fmt ", 12);
+  header.writeUInt32LE(16, 16); // PCM format chunk size
+  header.writeUInt16LE(1, 20);  // PCM format
+  header.writeUInt16LE(2, 22);  // Channels
+  header.writeUInt32LE(48000, 24); // Sample rate
+  header.writeUInt32LE(48000 * 2 * 2, 28); // Byte rate
+  header.writeUInt16LE(4, 32);  // Block align
+  header.writeUInt16LE(16, 34); // Bits per sample
+  header.write("data", 36);
+  header.writeUInt32LE(dataLength, 40);
+  return header;
+}
+
 export async function concatAudio(
   segments: AudioSegment[],
   output: string,
