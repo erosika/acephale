@@ -220,22 +220,6 @@ main {
   color: var(--accent);
 }
 
-.callin-btn {
-  color: var(--orange);
-  border-color: var(--orange);
-}
-
-.callin-btn:hover {
-  color: var(--fg-bright);
-  background: var(--orange);
-  border-color: var(--orange);
-}
-
-.callin-btn:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
 input[type="range"] {
   flex: 1;
   -webkit-appearance: none;
@@ -250,6 +234,64 @@ input[type="range"]::-webkit-slider-thumb {
   height: 12px;
   background: var(--fg);
   cursor: pointer;
+}
+
+/* --- History --- */
+
+.history {
+  border: 1px solid var(--border);
+  padding: 1.5rem;
+  margin-bottom: 2rem;
+  background: var(--bg-elevated);
+}
+
+.history h2 {
+  font-family: 'Departure Mono', ui-monospace, monospace;
+  font-size: 0.7rem;
+  font-weight: 400;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+  margin-bottom: 1rem;
+}
+
+.history-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  padding: 0.35rem 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.8rem;
+}
+
+.history-row:last-child {
+  border-bottom: none;
+}
+
+.history-time {
+  font-family: 'Departure Mono', ui-monospace, monospace;
+  font-size: 0.65rem;
+  color: var(--fg-muted);
+  flex-shrink: 0;
+  width: 3.5rem;
+}
+
+.history-track {
+  flex: 1;
+  color: var(--fg);
+}
+
+.history-meta {
+  font-family: 'Departure Mono', ui-monospace, monospace;
+  font-size: 0.6rem;
+  color: var(--accent-dim);
+  flex-shrink: 0;
+}
+
+.history-empty {
+  font-size: 0.8rem;
+  color: var(--fg-muted);
+  font-style: italic;
 }
 
 /* --- Transcript --- */
@@ -287,6 +329,40 @@ footer {
   font-size: 0.65rem;
   color: var(--fg-muted);
   letter-spacing: 0.05em;
+}
+
+/* --- Unmute Overlay --- */
+
+.unmute-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(11, 14, 20, 0.92);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.unmute-overlay.hidden {
+  display: none;
+}
+
+.unmute-btn {
+  font-family: 'Departure Mono', ui-monospace, monospace;
+  font-size: 1.2rem;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  padding: 1.25rem 3rem;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.unmute-btn:hover {
+  background: var(--accent);
+  color: var(--bg);
 }
 
 /* --- Responsive --- */

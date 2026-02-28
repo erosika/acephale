@@ -16,25 +16,25 @@
     <section class="dial-container">
       <div class="dial-label">STATION</div>
       <nav class="dial">
-        <button class="station active" data-station="morning-zoo" data-mount="/zoo">
+        <button class="station" data-station="morning-zoo" data-mount="zoo">
           <span class="station-id">1</span>
           <span class="station-name">Morning Zoo</span>
           <span class="station-format">talk + pop</span>
         </button>
         <span class="dial-gap">///</span>
-        <button class="station" data-station="crate-digger" data-mount="/crate">
+        <button class="station active" data-station="crate-digger" data-mount="crate">
           <span class="station-id">2</span>
           <span class="station-name">Crate Digger</span>
           <span class="station-format">deep cuts</span>
         </button>
         <span class="dial-gap">///</span>
-        <button class="station" data-station="conspiracy-hour" data-mount="/conspiracy">
+        <button class="station" data-station="conspiracy-hour" data-mount="conspiracy">
           <span class="station-id">3</span>
           <span class="station-name">Conspiracy Hour</span>
           <span class="station-format">late-night talk</span>
         </button>
         <span class="dial-gap">///</span>
-        <button class="station" data-station="request-line" data-mount="/request">
+        <button class="station" data-station="request-line" data-mount="request">
           <span class="station-id">4</span>
           <span class="station-name">Request Line</span>
           <span class="station-format">listener-driven</span>
@@ -44,15 +44,18 @@
 
     <section class="player">
       <div class="now-playing">
-        <span class="status-dot"></span>
-        <span class="status-text">IDLE</span>
+        <span class="status-dot live"></span>
+        <span class="status-text">TUNING IN...</span>
       </div>
       <div class="track-info" id="track-info"></div>
       <div class="controls">
-        <button id="play-btn" class="control-btn">PLAY</button>
-        <button id="callin-btn" class="control-btn callin-btn">CALL IN</button>
         <input type="range" id="volume" min="0" max="100" value="80">
       </div>
+    </section>
+
+    <section class="history" id="history">
+      <h2>RECENTLY PLAYED</h2>
+      <div class="history-entries" id="history-entries"></div>
     </section>
 
     <section class="transcript" id="transcript">
@@ -66,84 +69,151 @@
     <span>Google DeepMind Hackathon 2026</span>
   </footer>
 
-  <script>
-    const ICECAST_BASE = `http://${location.hostname}:8000`;
-    let audio = null;
-    let currentStation = 'morning-zoo';
+  <!-- Unmute overlay -- browsers block autoplay until user gesture -->
+  <div id="unmute-overlay" class="unmute-overlay">
+    <button id="unmute-btn" class="unmute-btn">TUNE IN</button>
+  </div>
 
-    const playBtn = document.getElementById('play-btn');
-    const callinBtn = document.getElementById('callin-btn');
+  <script>
+    let audio = null;
+    let currentStation = 'crate-digger';
+    let currentMount = 'crate';
+
     const volumeSlider = document.getElementById('volume');
-    const statusDot = document.querySelector('.status-dot');
     const statusText = document.querySelector('.status-text');
     const trackInfo = document.getElementById('track-info');
+    const historyEntries = document.getElementById('history-entries');
     const stationBtns = document.querySelectorAll('.station');
+    const unmuteOverlay = document.getElementById('unmute-overlay');
+    const unmuteBtn = document.getElementById('unmute-btn');
 
-    function setStation(station, mount) {
-      currentStation = station;
-      stationBtns.forEach(b => b.classList.remove('active'));
-      document.querySelector(`[data-station="${station}"]`).classList.add('active');
-
-      if (audio && !audio.paused) {
-        audio.pause();
-        audio = new Audio(`${ICECAST_BASE}${mount}`);
-        audio.volume = volumeSlider.value / 100;
-        audio.play();
-        const name = document.querySelector(`[data-station="${station}"] .station-name`).textContent;
-        statusText.textContent = `LIVE -- ${name.toUpperCase()}`;
-      }
+    function streamUrl(mount) {
+      // Direct Icecast URL -- no CORS issues for <audio> element playback
+      return `http://${location.hostname}:8000/${mount}`;
     }
 
+    let userHasInteracted = false;
+    let reconnectTimer = null;
+
+    function tuneIn(mount) {
+      if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+      if (audio) {
+        audio.pause();
+        audio.src = '';
+        audio = null;
+      }
+      currentMount = mount;
+      const url = streamUrl(mount);
+      console.log(`[radio] Tuning to ${url}`);
+      audio = new Audio(url);
+      audio.volume = volumeSlider.value / 100;
+
+      audio.addEventListener('playing', () => {
+        console.log('[radio] Stream active');
+        // Cancel any pending reconnect -- stream is working
+        if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+        const name = document.querySelector('.station.active .station-name').textContent;
+        statusText.textContent = `ON AIR \u2014 ${name.toUpperCase()}`;
+      });
+
+      audio.addEventListener('waiting', () => {
+        statusText.textContent = 'BUFFERING...';
+      });
+
+      audio.addEventListener('error', () => {
+        const err = audio?.error;
+        console.error(`[radio] Error: code=${err?.code} ${err?.message}`);
+        if (!userHasInteracted) return;
+        // Only reconnect if not already playing
+        if (audio && audio.readyState >= 2) return;
+        statusText.textContent = 'SIGNAL LOST -- RECONNECTING...';
+        if (!reconnectTimer) {
+          reconnectTimer = setTimeout(() => { reconnectTimer = null; tuneIn(currentMount); }, 5000);
+        }
+      });
+
+      audio.play().then(() => {
+        console.log('[radio] play() OK');
+        userHasInteracted = true;
+        unmuteOverlay.classList.add('hidden');
+      }).catch(err => {
+        console.warn(`[radio] Autoplay blocked, waiting for user gesture`);
+        if (!userHasInteracted) {
+          unmuteOverlay.classList.remove('hidden');
+        }
+      });
+    }
+
+    // Unmute overlay -- one click, then radio stays on forever
+    unmuteBtn.addEventListener('click', () => {
+      userHasInteracted = true;
+      unmuteOverlay.classList.add('hidden');
+      tuneIn(currentMount);
+    });
+
+    // Station switching
     stationBtns.forEach(btn => {
       btn.addEventListener('click', () => {
-        setStation(btn.dataset.station, btn.dataset.mount);
+        currentStation = btn.dataset.station;
+        stationBtns.forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        tuneIn(btn.dataset.mount);
+        fetchHistory();
       });
     });
 
-    playBtn.addEventListener('click', () => {
-      const mount = document.querySelector('.station.active').dataset.mount;
-      if (audio && !audio.paused) {
-        audio.pause();
-        audio = null;
-        playBtn.textContent = 'PLAY';
-        statusDot.classList.remove('live');
-        statusText.textContent = 'IDLE';
-        trackInfo.textContent = '';
-      } else {
-        audio = new Audio(`${ICECAST_BASE}${mount}`);
-        audio.volume = volumeSlider.value / 100;
-        audio.play();
-        playBtn.textContent = 'STOP';
-        statusDot.classList.add('live');
-        const name = document.querySelector('.station.active .station-name').textContent;
-        statusText.textContent = `LIVE -- ${name.toUpperCase()}`;
-      }
-    });
-
-    callinBtn.addEventListener('click', async () => {
-      // TODO: Gemini Live WebRTC session
-      callinBtn.textContent = 'RINGING...';
-      callinBtn.disabled = true;
-      try {
-        const res = await fetch(`/stations/${currentStation}/callin`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ listenerId: `web-${Date.now()}` }),
-        });
-        const data = await res.json();
-        callinBtn.textContent = data.queued ? 'IN QUEUE' : 'QUEUE FULL';
-      } catch {
-        callinBtn.textContent = 'CALL IN';
-      }
-      setTimeout(() => {
-        callinBtn.textContent = 'CALL IN';
-        callinBtn.disabled = false;
-      }, 5000);
-    });
-
+    // Volume
     volumeSlider.addEventListener('input', () => {
       if (audio) audio.volume = volumeSlider.value / 100;
     });
+
+    // Now-playing polling
+    let npInterval = setInterval(() => {
+      fetchNowPlaying();
+      fetchHistory();
+    }, 8000);
+
+    async function fetchNowPlaying() {
+      try {
+        const res = await fetch(`/stations/${currentStation}/now-playing`);
+        const data = await res.json();
+        if (data.title) {
+          let info = data.title;
+          if (data.artist) info += ` \u2014 ${data.artist}`;
+          if (data.year) info += ` (${data.year})`;
+          if (data.country) info += ` [${data.country}]`;
+          trackInfo.textContent = info;
+        } else {
+          trackInfo.textContent = '';
+        }
+      } catch {}
+    }
+
+    async function fetchHistory() {
+      try {
+        const res = await fetch(`/stations/${currentStation}/history?limit=10`);
+        const entries = await res.json();
+        if (!Array.isArray(entries) || entries.length === 0) {
+          historyEntries.innerHTML = '<div class="history-empty">No tracks yet</div>';
+          return;
+        }
+        historyEntries.innerHTML = entries.map(e => {
+          const time = new Date(e.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+          return `<div class="history-row">
+            <span class="history-time">${time}</span>
+            <span class="history-track">${e.title || 'Unknown'} \u2014 ${e.artist || '?'}</span>
+            <span class="history-meta">${e.year || ''} ${e.country || ''}</span>
+          </div>`;
+        }).join('');
+      } catch {
+        historyEntries.innerHTML = '';
+      }
+    }
+
+    // Boot -- show overlay, start polling
+    fetchNowPlaying();
+    fetchHistory();
+    unmuteOverlay.classList.remove('hidden');
   </script>
 </body>
 </html>
