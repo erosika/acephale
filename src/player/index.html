@@ -50,6 +50,7 @@
       <div class="track-info" id="track-info"></div>
       <div class="controls">
         <input type="range" id="volume" min="0" max="100" value="80">
+        <button id="call-in-btn" class="call-in-btn" title="Call in to the station">🎙️ CALL IN</button>
       </div>
     </section>
 
@@ -223,6 +224,65 @@
     fetchNowPlaying();
     fetchHistory();
     unmuteOverlay.classList.remove('hidden');
+
+    // --- Voice Calling via WebSocket ---
+    const callBtn = document.getElementById('call-in-btn');
+    let mediaRecorder = null;
+    let callWs = null;
+
+    callBtn.addEventListener('click', async () => {
+      if (mediaRecorder && mediaRecorder.state === 'recording') {
+        // Stop recording
+        mediaRecorder.stop();
+        callBtn.classList.remove('recording');
+        callBtn.textContent = '🎙️ CALL IN';
+        return;
+      }
+
+      // Start recording
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        
+        callWs = new WebSocket(`ws://${location.host}/ws/call`);
+        
+        callWs.onopen = () => {
+          callWs.send(JSON.stringify({ station: currentStation }));
+          
+          mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+          
+          mediaRecorder.ondataavailable = (e) => {
+            if (e.data.size > 0 && callWs.readyState === WebSocket.OPEN) {
+              callWs.send(e.data);
+            }
+          };
+          
+          mediaRecorder.onstop = () => {
+            stream.getTracks().forEach(t => t.stop());
+            setTimeout(() => {
+              if (callWs.readyState === WebSocket.OPEN) {
+                callWs.close();
+              }
+            }, 500); // Wait for final chunks
+          };
+          
+          mediaRecorder.start(250);
+          callBtn.classList.add('recording');
+          callBtn.textContent = '🔴 RECORDING...';
+        };
+
+        callWs.onerror = (e) => {
+          console.error('Call WebSocket error', e);
+          if (mediaRecorder) mediaRecorder.stop();
+          callBtn.classList.remove('recording');
+          callBtn.textContent = '🎙️ CALL IN';
+        };
+
+      } catch (err) {
+        console.error('Failed to access microphone', err);
+        alert('Could not access microphone.');
+      }
+    });
+
   </script>
 </body>
 </html>

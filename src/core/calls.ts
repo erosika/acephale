@@ -7,7 +7,7 @@ import { normalizeAudio, convertToMp3 } from "./audio.js";
 
 // --- Types ---
 
-export type CallType = "user" | "ai";
+export type CallType = "user" | "ai" | "user_voice";
 
 export type CallRequest = {
   id: string;
@@ -15,6 +15,7 @@ export type CallRequest = {
   text: string;
   type: CallType;
   timestamp: number;
+  audioBuf?: Buffer;
 };
 
 export type ProcessedCall = {
@@ -28,9 +29,9 @@ export type ProcessedCall = {
 
 const callQueue: CallRequest[] = [];
 
-export function addCall(station: string, text: string, type: CallType = "user"): string {
+export function addCall(station: string, text: string, type: CallType = "user", audioBuf?: Buffer): string {
   const id = `call_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
-  callQueue.push({ id, station, text, type, timestamp: Date.now() });
+  callQueue.push({ id, station, text, type, timestamp: Date.now(), audioBuf });
   console.log(`[calls] Added ${type} call to queue for ${station} (Queue size: ${callQueue.length})`);
   return id;
 }
@@ -75,18 +76,39 @@ export async function processCallWithLyriaUnderbed(
 
   console.log(`[calls] Processing call ${call.id}...`);
 
-  // 1. Synthesize caller voice (we use generic voices for callers)
-  const voices = ["Puck", "Charon", "Kore", "Fenrir", "Aoede"];
-  const callerVoice = voices[Math.floor(Math.random() * voices.length)];
-  const speech = await synthesizeSpeech(call.text, callerVoice);
-  
   const speechWav = join(tmpDir, `${call.id}_speech.wav`);
   const { writeFileSync } = await import("node:fs");
-  writeFileSync(speechWav, speech.audio);
+
+  let actualDurationMs = 0;
+
+  if (call.type === "user_voice" && call.audioBuf) {
+    // 1a. Use provided audio buffer directly
+    const rawWebm = join(tmpDir, `${call.id}_raw.webm`);
+    writeFileSync(rawWebm, call.audioBuf);
+    
+    // Convert to wav and get duration
+    const { runFfmpeg, probeDuration } = await import("./audio.js");
+    await runFfmpeg([
+      "-i", rawWebm,
+      "-ar", "24000",
+      "-ac", "1",
+      "-c:a", "pcm_s16le",
+      speechWav
+    ]);
+    actualDurationMs = (await probeDuration(speechWav)) * 1000;
+    try { unlinkSync(rawWebm); } catch {}
+  } else {
+    // 1b. Synthesize caller voice
+    const voices = ["Puck", "Charon", "Kore", "Fenrir", "Aoede"];
+    const callerVoice = voices[Math.floor(Math.random() * voices.length)];
+    const speech = await synthesizeSpeech(call.text, callerVoice);
+    writeFileSync(speechWav, speech.audio);
+    actualDurationMs = speech.durationMs;
+  }
 
   // 2. Generate Lyria underbed (music under voice)
   // We want the track to be slightly longer than the speech
-  const durationSec = Math.ceil(speech.durationMs / 1000) + 10;
+  const durationSec = Math.ceil(actualDurationMs / 1000) + 10;
   console.log(`[calls] Generating ${durationSec}s Lyria underbed for call...`);
   const lyria = await generateLyriaAmbient(mood, durationSec);
 
@@ -126,11 +148,6 @@ export async function processCallWithLyriaUnderbed(
   try { unlinkSync(lyria.mp3Path); } catch {}
   try { unlinkSync(mixedWav); } catch {}
   try { unlinkSync(normWav); } catch {}
-
-  // The duration is roughly the Lyria track duration since we used `duration=longest`
-  // But let's probe it to be exact
-  const { probeDuration } = await import("./audio.js");
-  const actualDurationMs = await probeDuration(finalMp3) * 1000;
 
   console.log(`[calls] Processed call ${call.id}: ${finalMp3}`);
 

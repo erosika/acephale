@@ -7,6 +7,7 @@ import { getStatus, skip, getQueue, type Channel } from "../core/stream.js";
 import { getNowPlaying, getAllNowPlaying } from "../core/nowplaying.js";
 import { getArchiveEntries } from "../core/archive.js";
 import { addCall } from "../core/calls.js";
+import { getGeminiFlash, transcribeAudio } from "../core/gemini.js";
 
 const PLAYER_DIR = join(import.meta.dir, "..", "player");
 
@@ -91,6 +92,43 @@ const app = new Elysia()
     } catch (err) {
       set.status = 500;
       return { error: String(err) };
+    }
+  })
+
+  // WebSocket for live voice recording from frontend
+  .ws("/ws/call", {
+    open(ws) {
+      Object.assign(ws.data, { chunks: [], station: "request-line" });
+    },
+    message(ws, message) {
+      const data = ws.data as any;
+      if (typeof message === "string") {
+        try {
+          const parsed = JSON.parse(message);
+          if (parsed.station) data.station = parsed.station;
+        } catch {}
+      } else {
+        // Binary audio chunk (webm)
+        data.chunks.push(Buffer.from(message as ArrayBuffer));
+      }
+    },
+    async close(ws) {
+      const data = ws.data as any;
+      if (data.chunks && data.chunks.length > 0) {
+        try {
+          const audioBuf = Buffer.concat(data.chunks);
+          console.log(`[ws] Received voice call for ${data.station} (${audioBuf.length} bytes), transcribing...`);
+          const model = getGeminiFlash();
+          // The frontend sends standard audio/webm
+          const text = await transcribeAudio(model, audioBuf, "audio/webm");
+          console.log(`[ws] Transcribed: "${text}"`);
+          if (text && text !== "[silence]") {
+            addCall(data.station, text, "user_voice", audioBuf);
+          }
+        } catch (err) {
+          console.error("[ws] Voice call processing failed:", err);
+        }
+      }
     }
   })
 

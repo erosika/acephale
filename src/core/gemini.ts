@@ -62,6 +62,30 @@ export async function generateText(
   return result.response.text();
 }
 
+export async function transcribeAudio(
+  model: GenerativeModel,
+  audioBuf: Buffer,
+  mimeType: string
+): Promise<string> {
+  const result = await model.generateContent({
+    contents: [
+      {
+        role: "user",
+        parts: [
+          { text: "Transcribe this audio. Return ONLY the spoken text, nothing else. Do not add any commentary. If you don't hear any speech, return '[silence]'." },
+          {
+            inlineData: {
+              data: audioBuf.toString("base64"),
+              mimeType,
+            },
+          },
+        ],
+      },
+    ],
+  });
+  return result.response.text().trim();
+}
+
 export function _resetGemini(): void {
   genAI = null;
   proModel = null;

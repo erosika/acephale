@@ -220,6 +220,30 @@ main {
   color: var(--accent);
 }
 
+.call-in-btn {
+  font-family: 'Departure Mono', ui-monospace, monospace;
+  font-size: 0.75rem;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  background: transparent;
+  color: var(--orange);
+  border: 1px solid var(--orange);
+  padding: 0.4rem 0.8rem;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.call-in-btn:hover {
+  background: rgba(230, 168, 85, 0.1);
+}
+
+.call-in-btn.recording {
+  background: var(--red);
+  border-color: var(--red);
+  color: var(--bg);
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
 input[type="range"] {
   flex: 1;
   -webkit-appearance: none;
