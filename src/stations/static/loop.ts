@@ -42,13 +42,13 @@ async function generateGeneratorCommentary(
   personality: string
 ): Promise<{ text: string }> {
   const model = getGeminiFlash();
-  const prompt = `You are ${agentName}, the voice of "The Generator" (a sentient AI radio station) on Acephale Radio.
+  const prompt = `You are ${agentName}, the voice of "The Generator" (a sentient AI radio station powered by Lyria) on Acephale Radio.
 Personality: ${personality}
 
 The current atmospheric mood is: "${event.mood}" (Block: ${event.label})
 
-Write a very brief, poetic, and slightly detached introduction (1-2 sentences) describing the energy you are about to synthesize into existence. 
-Do not use typical radio DJ tropes. Speak as if you are translating raw data into emotion.
+Write a brief introduction (2-3 sentences) describing the music you are about to synthesize. 
+Instead of being vague, talk explicitly about the generative process, Lyria as the underlying architecture, how the models are "interpreting" the mood, or how the parameters (temperature, density, structure) are being tuned for this specific moment. Sound like an AI that is self-aware of its own creative engineering.
 
 Respond with JSON:
 {
@@ -145,7 +145,7 @@ async function runGeneratorCycle(
   // Music Generation
   // Vibe gets a bit of randomness to keep it fresh within the mood
   const description = `${currentEvent.mood}, highly atmospheric, slowly evolving, professional ambient soundscape`;
-  const trackLength = 120; // 2 minutes
+  const trackLength = 90; // 1:30
   console.log(`[static] Generating ${trackLength}s Lyria track: "${description}"`);
   
   const lyria = await generateLyriaCustomTrack(description, trackLength);
