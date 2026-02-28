@@ -231,8 +231,7 @@ async function runGeneratorCycle(
 
   // Calculate wait time
   const totalMs = bleedDuration + lyria.durationMs;
-  const prepLeadMs = 30000; // start 30s before track ends
-  return Math.max(5000, totalMs - prepLeadMs);
+  return totalMs;
 }
 
 // --- Main Loop ---
@@ -280,9 +279,12 @@ export async function runStaticLoop(): Promise<never> {
       // The call is passed directly into the generator cycle where it will be mixed over the music
       const waitMs = await runGeneratorCycle(agent, schedule, call || undefined, memories);
       
+      const prepLeadMs = Math.min(30000, waitMs * 0.4);
+      const sleepMs = Math.max(5000, waitMs - prepLeadMs);
+
       cycleCount++;
-      console.log(`[static] Cycle #${cycleCount}. Waiting ~${Math.round(waitMs / 1000)}s`);
-      await Bun.sleep(waitMs);
+      console.log(`[static] Cycle #${cycleCount} queued. Waiting ~${Math.round(sleepMs / 1000)}s`);
+      await Bun.sleep(sleepMs);
     } catch (err) {
       console.error("[static] Loop error:", err);
       await Bun.sleep(10000);
