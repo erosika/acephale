@@ -350,6 +350,9 @@ export async function runRequestLineLoop(): Promise<never> {
       if (call) {
         console.log(`[request-line] Handling call: ${call.id}`);
         try {
+          const { saveCall } = await import("../../core/honcho.js");
+          await saveCall("request-line", call.id, call.text);
+
           const processed = await processCallWithLyriaUnderbed(call);
           
           // Queue the call to the stream

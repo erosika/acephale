@@ -28,19 +28,23 @@ async function getChannel(
   channel: string,
   peerIds: string[]
 ): Promise<{ session: Session; peers: Record<string, Peer> }> {
-  if (channels[channel]) return channels[channel];
-
   const honcho = getHonchoClient();
-  const session = await honcho.session(channel);
 
-  const peers: Record<string, Peer> = {};
-  for (const id of peerIds) {
-    const peer = await honcho.peer(id);
-    peers[id] = peer;
-    await session.addPeers(peer);
+  if (!channels[channel]) {
+    const session = await honcho.session(channel);
+    channels[channel] = { session, peers: {} };
   }
 
-  channels[channel] = { session, peers };
+  const { session, peers } = channels[channel];
+
+  for (const id of peerIds) {
+    if (!peers[id]) {
+      const peer = await honcho.peer(id);
+      peers[id] = peer;
+      await session.addPeers(peer);
+    }
+  }
+
   return channels[channel];
 }
 
@@ -125,6 +129,22 @@ export async function saveRequestLineCycle(
   await session.addMessages(messages);
 }
 
+// The Generator (Static): ambient generation records
+export async function saveGeneratorCycle(
+  peerId: string,
+  commentary: string,
+  trackTitle: string,
+  trackPrompt: string
+): Promise<void> {
+  const { session, peers } = await getChannel("static", [peerId]);
+  const peer = peers[peerId];
+
+  await session.addMessages([
+    peer.message(commentary),
+    peer.message(`Synthesized Track: "${trackTitle}" (Prompt: ${trackPrompt})`)
+  ]);
+}
+
 // Morning Zoo: both hosts share the same persistent session
 export async function saveZooEpisode(
   peerMap: Record<string, string>,
@@ -149,6 +169,19 @@ export async function saveZooEpisode(
     return peer.message(line.text);
   });
   await session.addMessages(messages);
+}
+
+// Callers: Add listener calls to a station's session so the DJ remembers them
+export async function saveCall(
+  station: string,
+  callerId: string,
+  text: string
+): Promise<void> {
+  const { session, peers } = await getChannel(station, [callerId]);
+  const peer = peers[callerId];
+  await session.addMessages([
+    peer.message(text, { metadata: { isCall: true } })
+  ]);
 }
 
 export function _resetHoncho(): void {

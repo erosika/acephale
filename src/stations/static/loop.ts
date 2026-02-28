@@ -39,23 +39,30 @@ function getCurrentScheduleEvent(schedule: ScheduleEvent[]): ScheduleEvent {
 async function generateGeneratorCommentary(
   event: ScheduleEvent,
   agentName: string,
-  personality: string
-): Promise<{ text: string; title: string }> {
+  personality: string,
+  callContext?: string,
+  memories?: string[]
+): Promise<{ text: string; title: string; track_prompt: string }> {
   const model = getGeminiFlash();
   const prompt = `You are ${agentName}, the voice of "The Generator" (a sentient AI radio station powered by Lyria) on Acephale Radio.
 Personality: ${personality}
 
 The current atmospheric mood is: "${event.mood}" (Block: ${event.label})
 
+${memories && memories.length > 0 ? `Your recent memories/interactions:\n${memories.map(m => `- ${m}`).join("\n")}` : ""}
+${callContext ? `\nA listener just called in and said: ${callContext}\nYou MUST respond to them in your commentary and incorporate their request or vibe into the track you are generating.` : ""}
+
 Write a brief introduction (2-3 sentences) describing the music you are about to synthesize. 
 Instead of being vague, talk explicitly about the generative process, Lyria as the underlying architecture, how the models are "interpreting" the mood, or how the parameters (temperature, density, structure) are being tuned for this specific moment. Sound like an AI that is self-aware of its own creative engineering.
 
 Also provide a short 2-5 word abstract title for the audio track being generated.
+Also provide a 'track_prompt' that describes the audio for the Lyria generator model (e.g. "dark ambient drone, heavy sub bass, ethereal pads"). This should be influenced by the current mood, and heavily influenced by the caller if there was one.
 
 Respond with JSON:
 {
   "text": "your narration",
-  "title": "Abstract Track Title"
+  "title": "Abstract Track Title",
+  "track_prompt": "description of the track to generate"
 }`;
 
   return generateStructured(model, prompt, (raw) => JSON.parse(raw));
@@ -124,14 +131,16 @@ async function renderBleedEffect(type: string): Promise<{ mp3Path: string; durat
 // --- Main Cycle ---
 
 async function runGeneratorCycle(
-  agent: { name: string; voice: string; personality: string },
-  schedule: ScheduleEvent[]
+  agent: { name: string; voice: string; personality: string; honchoUser: string },
+  schedule: ScheduleEvent[],
+  callContext?: string,
+  memories?: string[]
 ): Promise<number> {
   const currentEvent = getCurrentScheduleEvent(schedule);
   console.log(`[static] Current block: ${currentEvent.label} (${currentEvent.mood})`);
 
-  // Haunted frequencies check
-  const bleedType = getBleedEffect();
+  // Haunted frequencies check (skip if there's a real caller)
+  const bleedType = callContext ? null : getBleedEffect();
   let bleedDuration = 0;
   
   if (bleedType) {
@@ -142,12 +151,11 @@ async function runGeneratorCycle(
   }
 
   // Commentary
-  const commentary = await generateGeneratorCommentary(currentEvent, agent.name, agent.personality);
+  const commentary = await generateGeneratorCommentary(currentEvent, agent.name, agent.personality, callContext, memories);
   const renderedSpeech = await renderSpeech(commentary.text, agent.voice);
 
   // Music Generation
-  // Vibe gets a bit of randomness to keep it fresh within the mood
-  const description = `${currentEvent.mood}, highly atmospheric, slowly evolving, professional ambient soundscape`;
+  const description = `${commentary.track_prompt}, highly atmospheric, slowly evolving, professional ambient soundscape`;
   const trackLength = 90; // 1:30
   console.log(`[static] Generating ${trackLength}s Lyria track: "${description}"`);
   
@@ -175,6 +183,14 @@ async function runGeneratorCycle(
     artist: "The Generator",
     duration: Math.round(lyria.durationMs / 1000),
   });
+
+  // Save to Honcho
+  try {
+    const { saveGeneratorCycle } = await import("../../core/honcho.js");
+    await saveGeneratorCycle(agent.honchoUser, commentary.text, commentary.title, commentary.track_prompt);
+  } catch {
+    // Non-fatal
+  }
 
   // Calculate wait time to start generating next track before this one finishes
   const totalMs = bleedDuration + renderedSpeech.durationMs + lyria.durationMs;
@@ -205,9 +221,15 @@ export async function runStaticLoop(): Promise<never> {
       const call = (await import("../../core/calls.js")).pickNextCall("request-line") || 
                    (await import("../../core/calls.js")).pickNextCall("static");
       
+      let callContext: string | undefined = undefined;
+
       if (call) {
         console.log(`[static] Handling call: ${call.id}`);
         try {
+          // Save the caller to Honcho as a peer on the "static" channel
+          const { saveCall } = await import("../../core/honcho.js");
+          await saveCall("static", call.id, call.text);
+
           const processed = await (await import("../../core/calls.js")).processCallWithLyriaUnderbed(call);
           
           await queueTrack("static", processed.mp3Path, {
@@ -223,6 +245,7 @@ export async function runStaticLoop(): Promise<never> {
           
           callWaitMs = processed.durationMs + 2000;
           handledCall = true;
+          callContext = call.text;
         } catch (err) {
           console.error(`[static] Failed to process call ${call.id}:`, err);
         }
@@ -233,7 +256,16 @@ export async function runStaticLoop(): Promise<never> {
         await Bun.sleep(callWaitMs);
       }
 
-      const waitMs = await runGeneratorCycle(agent, schedule);
+      // Fetch memories
+      let memories: string[] = [];
+      try {
+        const { getAgentMemory } = await import("../../core/honcho.js");
+        memories = await getAgentMemory(agent.honchoUser);
+      } catch {
+        // First run or Honcho unavailable
+      }
+
+      const waitMs = await runGeneratorCycle(agent, schedule, callContext, memories);
       
       cycleCount++;
       console.log(`[static] Cycle #${cycleCount}. Waiting ~${Math.round(waitMs / 1000)}s`);
