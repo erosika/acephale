@@ -1,0 +1,101 @@
+import { join } from "node:path";
+import { loadAgentRoster, getEnv } from "../../core/config.js";
+import { getAgentMemory, startEpisodeSession, saveEpisodeMemory } from "../../core/honcho.js";
+import { queueTrack } from "../../core/stream.js";
+import { getZooHosts, type ZooHost } from "./hosts.js";
+import { gatherSources } from "./sources.js";
+import { generateScript, type EpisodeScript } from "./script.js";
+import { renderEpisode, type RenderedEpisode } from "./render.js";
+
+// --- Types ---
+
+export type EpisodeResult = {
+  script: EpisodeScript;
+  rendered: RenderedEpisode;
+  timestamp: string;
+};
+
+// --- Episode Pipeline ---
+
+export async function generateEpisode(): Promise<EpisodeResult> {
+  const timestamp = new Date().toISOString();
+  console.log(`[morning-zoo] Starting episode generation at ${timestamp}`);
+
+  // 1. Load hosts
+  const roster = loadAgentRoster();
+  const hosts = getZooHosts(roster);
+  console.log(`[morning-zoo] Hosts: ${hosts.map((h) => h.name).join(", ")}`);
+
+  // 2. Fetch memories
+  const hostsWithMemory: ZooHost[] = await Promise.all(
+    hosts.map(async (host) => {
+      let memories: string[] = [];
+      try {
+        memories = await getAgentMemory(host.honchoUser);
+      } catch {
+        console.log(`[morning-zoo] No memories for ${host.name} (first episode?)`);
+      }
+      return { ...host, memories };
+    })
+  );
+
+  // 3. Gather content sources
+  const sources = await gatherSources(undefined, true);
+  console.log(`[morning-zoo] Gathered ${sources.length} content sources`);
+
+  // 4. Generate script
+  const script = await generateScript(hostsWithMemory, sources, 12);
+  console.log(`[morning-zoo] Script: "${script.title}" (${script.lines.length} lines)`);
+
+  // 5. Render audio
+  const episodesDir = join(import.meta.dir, "..", "..", "..", "episodes");
+  const rendered = await renderEpisode(script, roster, episodesDir);
+  console.log(`[morning-zoo] Rendered: ${rendered.mp3Path} (~${Math.round(rendered.durationMs / 1000)}s)`);
+
+  // 6. Save transcript to Honcho
+  for (const host of hostsWithMemory) {
+    try {
+      const { peer, session } = await startEpisodeSession(host.honchoUser, {
+        episodeTitle: script.title,
+        topic: script.topic,
+        timestamp,
+      });
+      await saveEpisodeMemory(peer, session, script.lines);
+    } catch (err) {
+      console.log(`[morning-zoo] Failed to save memory for ${host.name}: ${err}`);
+    }
+  }
+
+  return { script, rendered, timestamp };
+}
+
+// --- Queue + Loop ---
+
+export async function queueEpisode(result: EpisodeResult): Promise<void> {
+  try {
+    await queueTrack("morning-zoo", result.rendered.mp3Path);
+    console.log(`[morning-zoo] Queued episode in liquidsoap`);
+  } catch (err) {
+    console.log(`[morning-zoo] Failed to queue (liquidsoap not running?): ${err}`);
+  }
+}
+
+export async function runLoop(): Promise<void> {
+  const intervalMinutes = parseInt(getEnv("EPISODE_INTERVAL_MINUTES", "15"), 10);
+  console.log(`[morning-zoo] Starting episode loop (interval: ${intervalMinutes}min)`);
+
+  while (true) {
+    try {
+      const result = await generateEpisode();
+      await queueEpisode(result);
+    } catch (err) {
+      console.error(`[morning-zoo] Episode generation failed:`, err);
+    }
+
+    await Bun.sleep(intervalMinutes * 60 * 1000);
+  }
+}
+
+if (import.meta.main) {
+  runLoop().catch(console.error);
+}

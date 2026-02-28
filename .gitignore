@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.tmp/
+episodes/
+tracks/
+sources/
+*.mp3
+*.wav
+.env

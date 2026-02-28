@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Acephale Radio</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>ACEPHALE RADIO</h1>
+    <p class="subtitle">headless transmission</p>
+  </header>
+
+  <main>
+    <section class="dial-container">
+      <div class="dial-label">STATION</div>
+      <nav class="dial">
+        <button class="station active" data-station="morning-zoo" data-mount="/zoo">
+          <span class="station-id">1</span>
+          <span class="station-name">Morning Zoo</span>
+          <span class="station-format">talk + pop</span>
+        </button>
+        <span class="dial-gap">///</span>
+        <button class="station" data-station="crate-digger" data-mount="/crate">
+          <span class="station-id">2</span>
+          <span class="station-name">Crate Digger</span>
+          <span class="station-format">deep cuts</span>
+        </button>
+        <span class="dial-gap">///</span>
+        <button class="station" data-station="conspiracy-hour" data-mount="/conspiracy">
+          <span class="station-id">3</span>
+          <span class="station-name">Conspiracy Hour</span>
+          <span class="station-format">late-night talk</span>
+        </button>
+        <span class="dial-gap">///</span>
+        <button class="station" data-station="request-line" data-mount="/request">
+          <span class="station-id">4</span>
+          <span class="station-name">Request Line</span>
+          <span class="station-format">listener-driven</span>
+        </button>
+      </nav>
+    </section>
+
+    <section class="player">
+      <div class="now-playing">
+        <span class="status-dot"></span>
+        <span class="status-text">IDLE</span>
+      </div>
+      <div class="track-info" id="track-info"></div>
+      <div class="controls">
+        <button id="play-btn" class="control-btn">PLAY</button>
+        <button id="callin-btn" class="control-btn callin-btn">CALL IN</button>
+        <input type="range" id="volume" min="0" max="100" value="80">
+      </div>
+    </section>
+
+    <section class="transcript" id="transcript">
+      <h2>LIVE TRANSCRIPT</h2>
+      <div class="transcript-lines"></div>
+    </section>
+  </main>
+
+  <footer>
+    <span>Gemini + Honcho + Lyria + Radiooooo</span>
+    <span>Google DeepMind Hackathon 2026</span>
+  </footer>
+
+  <script>
+    const ICECAST_BASE = `http://${location.hostname}:8000`;
+    let audio = null;
+    let currentStation = 'morning-zoo';
+
+    const playBtn = document.getElementById('play-btn');
+    const callinBtn = document.getElementById('callin-btn');
+    const volumeSlider = document.getElementById('volume');
+    const statusDot = document.querySelector('.status-dot');
+    const statusText = document.querySelector('.status-text');
+    const trackInfo = document.getElementById('track-info');
+    const stationBtns = document.querySelectorAll('.station');
+
+    function setStation(station, mount) {
+      currentStation = station;
+      stationBtns.forEach(b => b.classList.remove('active'));
+      document.querySelector(`[data-station="${station}"]`).classList.add('active');
+
+      if (audio && !audio.paused) {
+        audio.pause();
+        audio = new Audio(`${ICECAST_BASE}${mount}`);
+        audio.volume = volumeSlider.value / 100;
+        audio.play();
+        const name = document.querySelector(`[data-station="${station}"] .station-name`).textContent;
+        statusText.textContent = `LIVE -- ${name.toUpperCase()}`;
+      }
+    }
+
+    stationBtns.forEach(btn => {
+      btn.addEventListener('click', () => {
+        setStation(btn.dataset.station, btn.dataset.mount);
+      });
+    });
+
+    playBtn.addEventListener('click', () => {
+      const mount = document.querySelector('.station.active').dataset.mount;
+      if (audio && !audio.paused) {
+        audio.pause();
+        audio = null;
+        playBtn.textContent = 'PLAY';
+        statusDot.classList.remove('live');
+        statusText.textContent = 'IDLE';
+        trackInfo.textContent = '';
+      } else {
+        audio = new Audio(`${ICECAST_BASE}${mount}`);
+        audio.volume = volumeSlider.value / 100;
+        audio.play();
+        playBtn.textContent = 'STOP';
+        statusDot.classList.add('live');
+        const name = document.querySelector('.station.active .station-name').textContent;
+        statusText.textContent = `LIVE -- ${name.toUpperCase()}`;
+      }
+    });
+
+    callinBtn.addEventListener('click', async () => {
+      // TODO: Gemini Live WebRTC session
+      callinBtn.textContent = 'RINGING...';
+      callinBtn.disabled = true;
+      try {
+        const res = await fetch(`/stations/${currentStation}/callin`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ listenerId: `web-${Date.now()}` }),
+        });
+        const data = await res.json();
+        callinBtn.textContent = data.queued ? 'IN QUEUE' : 'QUEUE FULL';
+      } catch {
+        callinBtn.textContent = 'CALL IN';
+      }
+      setTimeout(() => {
+        callinBtn.textContent = 'CALL IN';
+        callinBtn.disabled = false;
+      }, 5000);
+    });
+
+    volumeSlider.addEventListener('input', () => {
+      if (audio) audio.volume = volumeSlider.value / 100;
+    });
+  </script>
+</body>
+</html>

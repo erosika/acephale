@@ -1,0 +1,311 @@
+:root {
+  --bg: #0b0e14;
+  --bg-elevated: #141820;
+  --fg: #c9d1d9;
+  --fg-muted: #6e7681;
+  --fg-bright: #e6edf3;
+  --accent: #7eb8f6;
+  --accent-dim: #4a6a8f;
+  --green: #7ee6a8;
+  --orange: #e6a855;
+  --red: #f47067;
+  --border: #21262d;
+}
+
+@font-face {
+  font-family: 'Departure Mono';
+  src: local('Departure Mono');
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: 'New York', 'Iowan Old Style', ui-serif, Georgia, serif;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+header {
+  padding: 2rem 2rem 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+header h1 {
+  font-family: 'Departure Mono', ui-monospace, monospace;
+  font-size: 1.5rem;
+  font-weight: 400;
+  letter-spacing: 0.2em;
+  color: var(--fg-bright);
+}
+
+.subtitle {
+  font-family: 'Departure Mono', ui-monospace, monospace;
+  font-size: 0.75rem;
+  color: var(--fg-muted);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  margin-top: 0.25rem;
+}
+
+main {
+  flex: 1;
+  padding: 2rem;
+  max-width: 720px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+/* --- Dial --- */
+
+.dial-container {
+  margin-bottom: 2rem;
+}
+
+.dial-label {
+  font-family: 'Departure Mono', ui-monospace, monospace;
+  font-size: 0.6rem;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+  margin-bottom: 0.5rem;
+}
+
+.dial {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  overflow: hidden;
+}
+
+.station {
+  flex: 1;
+  background: transparent;
+  border: none;
+  padding: 1rem 0.75rem;
+  cursor: pointer;
+  text-align: center;
+  color: var(--fg-muted);
+  font-family: inherit;
+  transition: background 0.15s, color 0.15s;
+}
+
+.station:hover {
+  background: rgba(126, 184, 246, 0.05);
+}
+
+.station.active {
+  background: var(--bg);
+  color: var(--fg);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.station-id {
+  font-family: 'Departure Mono', ui-monospace, monospace;
+  font-size: 1.2rem;
+  display: block;
+  color: var(--accent-dim);
+  margin-bottom: 0.25rem;
+}
+
+.station.active .station-id {
+  color: var(--accent);
+}
+
+.station-name {
+  font-family: 'Departure Mono', ui-monospace, monospace;
+  font-size: 0.65rem;
+  letter-spacing: 0.05em;
+  display: block;
+  color: inherit;
+}
+
+.station-format {
+  font-size: 0.65rem;
+  color: var(--fg-muted);
+  display: block;
+  margin-top: 0.15rem;
+}
+
+.dial-gap {
+  font-family: 'Departure Mono', ui-monospace, monospace;
+  font-size: 0.5rem;
+  color: var(--border);
+  letter-spacing: -0.1em;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+/* --- Player --- */
+
+.player {
+  border: 1px solid var(--border);
+  padding: 1.5rem;
+  margin-bottom: 2rem;
+  background: var(--bg-elevated);
+}
+
+.now-playing {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.track-info {
+  font-size: 0.85rem;
+  color: var(--fg);
+  margin-bottom: 1rem;
+  min-height: 1.2em;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  background: var(--fg-muted);
+  display: inline-block;
+}
+
+.status-dot.live {
+  background: var(--green);
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.status-text {
+  font-family: 'Departure Mono', ui-monospace, monospace;
+  font-size: 0.75rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+
+.status-dot.live + .status-text {
+  color: var(--green);
+}
+
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.control-btn {
+  font-family: 'Departure Mono', ui-monospace, monospace;
+  font-size: 0.75rem;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  background: transparent;
+  color: var(--fg-bright);
+  border: 1px solid var(--border);
+  padding: 0.5rem 1.25rem;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.control-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.callin-btn {
+  color: var(--orange);
+  border-color: var(--orange);
+}
+
+.callin-btn:hover {
+  color: var(--fg-bright);
+  background: var(--orange);
+  border-color: var(--orange);
+}
+
+.callin-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+input[type="range"] {
+  flex: 1;
+  -webkit-appearance: none;
+  height: 2px;
+  background: var(--border);
+  outline: none;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  background: var(--fg);
+  cursor: pointer;
+}
+
+/* --- Transcript --- */
+
+.transcript {
+  border: 1px solid var(--border);
+  padding: 1.5rem;
+  background: var(--bg-elevated);
+}
+
+.transcript h2 {
+  font-family: 'Departure Mono', ui-monospace, monospace;
+  font-size: 0.7rem;
+  font-weight: 400;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+  margin-bottom: 1rem;
+}
+
+.transcript-lines {
+  font-size: 0.9rem;
+  line-height: 1.6;
+  color: var(--fg);
+}
+
+/* --- Footer --- */
+
+footer {
+  padding: 1rem 2rem;
+  border-top: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+  font-family: 'Departure Mono', ui-monospace, monospace;
+  font-size: 0.65rem;
+  color: var(--fg-muted);
+  letter-spacing: 0.05em;
+}
+
+/* --- Responsive --- */
+
+@media (max-width: 600px) {
+  .dial {
+    flex-wrap: wrap;
+  }
+
+  .dial-gap {
+    display: none;
+  }
+
+  .station {
+    flex: 1 1 45%;
+  }
+
+  footer {
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+}

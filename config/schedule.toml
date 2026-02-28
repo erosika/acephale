@@ -1,0 +1,38 @@
+# Event schedule for mood steering (Ch3 generator + Ch1 topic hints)
+# Times in UTC. Mood descriptors drive Lyria prompt generation.
+
+[[events]]
+time = "09:00"
+duration_minutes = 60
+mood = "morning ambient, gentle, waking up"
+label = "Morning drift"
+
+[[events]]
+time = "10:00"
+duration_minutes = 120
+mood = "focused, rhythmic, building energy"
+label = "Deep work"
+
+[[events]]
+time = "12:00"
+duration_minutes = 60
+mood = "playful, eclectic, lunch break energy"
+label = "Midday mix"
+
+[[events]]
+time = "14:00"
+duration_minutes = 180
+mood = "experimental, evolving, afternoon exploration"
+label = "Afternoon session"
+
+[[events]]
+time = "17:00"
+duration_minutes = 120
+mood = "wind down, warm, reflective"
+label = "Golden hour"
+
+[[events]]
+time = "19:00"
+duration_minutes = 180
+mood = "nocturnal, deep, immersive"
+label = "Night mode"
