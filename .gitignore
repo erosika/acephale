@@ -7,3 +7,4 @@ sources/
 *.mp3
 *.wav
 .env
+COMMITS.md

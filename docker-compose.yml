@@ -7,6 +7,7 @@ services:
       ICECAST_SOURCE_PASSWORD: hackme
       ICECAST_ADMIN_PASSWORD: hackme
       ICECAST_HOSTNAME: localhost
+      ICECAST_MAX_SOURCES: 8
 
   liquidsoap-zoo:
     image: savonet/liquidsoap:v2.3.1
@@ -15,6 +16,8 @@ services:
     volumes:
       - ./episodes:/episodes
       - ./config/liquidsoap:/config
+      - ./archive:/archive
+      - ./.tmp:/tmp-tracks
     command: liquidsoap /config/zoo.liq
     ports:
       - "1234:1234"
@@ -26,6 +29,8 @@ services:
     volumes:
       - ./tracks:/tracks
       - ./config/liquidsoap:/config
+      - ./archive:/archive
+      - ./.tmp:/tmp-tracks
     command: liquidsoap /config/crate.liq
     ports:
       - "1235:1235"
@@ -37,6 +42,8 @@ services:
     volumes:
       - ./episodes:/episodes
       - ./config/liquidsoap:/config
+      - ./archive:/archive
+      - ./.tmp:/tmp-tracks
     command: liquidsoap /config/conspiracy.liq
     ports:
       - "1236:1236"
@@ -48,6 +55,8 @@ services:
     volumes:
       - ./tracks:/tracks
       - ./config/liquidsoap:/config
+      - ./archive:/archive
+      - ./.tmp:/tmp-tracks
     command: liquidsoap /config/request.liq
     ports:
       - "1237:1237"
