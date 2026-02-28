@@ -92,24 +92,30 @@
       { id: 'conspiracy-hour', mount: 'conspiracy',  pos: 62, name: 'Conspiracy Hour',  format: 'late-night talk' },
       { id: 'request-line',    mount: 'request',     pos: 85, name: 'Request Line',     format: 'listener-driven' },
     ];
-    const LOCK_TOLERANCE = 4;
+    const LOCK_IN        = 4;   // distance to enter lock (display shows station)
+    const LOCK_OUT       = 7;   // distance to leave lock (hysteresis band)
+    const BLEND_RADIUS   = 15;  // stream audible within this distance
 
     // ========================================================
     // STATE
     // ========================================================
-    let tuning = 50;          // 0-100
-    let volume = 80;          // 0-100
+    let tuning = 50;
+    let volume = 80;
     let isPowerOn = false;
-    let lockedStation = null;  // Station object or null
+    let lockedStation = null;
     let userHasInteracted = false;
 
-    // Drag state
-    let dragging = null;       // 'tuning' | 'volume' | null
-    let dragStartAngle = 0;
-    let dragStartValue = 0;
+    // Display state tracker -- only rebuild DOM when this changes
+    let displayMode = 'off';  // 'off' | 'static' | station id string
+    let rafPending = false;
+
+    // Drag state -- incremental delta with wrap normalization
+    let dragging = null;
+    let prevAngle = 0;        // angle from previous frame (for incremental delta)
+    let accumValue = 0;       // accumulated dial value during drag
 
     // Audio
-    const streams = {};        // mount -> Audio
+    const streams = {};
     let audioCtx = null;
     let staticSource = null;
     let staticGain = null;
@@ -141,21 +147,36 @@
     function buildDialSVG(svg, opts) {
       const ns = 'http://www.w3.org/2000/svg';
 
-      // Outer ring
+      // Radial gradient for depth
+      const defs = document.createElementNS(ns, 'defs');
+      const grad = document.createElementNS(ns, 'radialGradient');
+      grad.id = opts.groupId + '-grad';
+      grad.setAttribute('cx', '45%'); grad.setAttribute('cy', '40%');
+      grad.setAttribute('r', '55%');
+      const stop1 = document.createElementNS(ns, 'stop');
+      stop1.setAttribute('offset', '0%');
+      stop1.setAttribute('stop-color', '#252a2e');
+      const stop2 = document.createElementNS(ns, 'stop');
+      stop2.setAttribute('offset', '100%');
+      stop2.setAttribute('stop-color', '#111314');
+      grad.appendChild(stop1);
+      grad.appendChild(stop2);
+      defs.appendChild(grad);
+      svg.appendChild(defs);
+
       const outer = document.createElementNS(ns, 'circle');
       outer.setAttribute('cx', '50'); outer.setAttribute('cy', '50');
       outer.setAttribute('r', '48');
       outer.classList.add('dial-knob-ring');
+      outer.setAttribute('fill', `url(#${opts.groupId}-grad)`);
       svg.appendChild(outer);
 
-      // Inner ring
       const inner = document.createElementNS(ns, 'circle');
       inner.setAttribute('cx', '50'); inner.setAttribute('cy', '50');
       inner.setAttribute('r', '42');
       inner.classList.add('dial-knob-inner');
       svg.appendChild(inner);
 
-      // 24 tick marks
       for (let i = 0; i < 24; i++) {
         const angle = (i / 24) * 360;
         const rad = (angle * Math.PI) / 180;
@@ -170,17 +191,12 @@
         svg.appendChild(tick);
       }
 
-      // Indicator line (the pointer)
+      const g = document.createElementNS(ns, 'g');
+      g.id = opts.groupId;
       const indicator = document.createElementNS(ns, 'line');
       indicator.setAttribute('x1', '50'); indicator.setAttribute('y1', '50');
       indicator.setAttribute('x2', '50'); indicator.setAttribute('y2', '12');
       indicator.classList.add('dial-indicator');
-      indicator.id = opts.indicatorId;
-      svg.appendChild(indicator);
-
-      // Group for rotation
-      const g = document.createElementNS(ns, 'g');
-      g.id = opts.groupId;
       g.appendChild(indicator);
       svg.appendChild(g);
     }
@@ -191,15 +207,13 @@
       if (g) g.setAttribute('transform', `rotate(${deg} 50 50)`);
     }
 
-    // Build both dials
-    buildDialSVG(tuningSvg, { indicatorId: 'tuning-indicator-line', groupId: 'tuning-group' });
-    buildDialSVG(volumeSvg, { indicatorId: 'volume-indicator-line', groupId: 'volume-group' });
+    buildDialSVG(tuningSvg, { groupId: 'tuning-group' });
+    buildDialSVG(volumeSvg, { groupId: 'volume-group' });
 
     // ========================================================
     // FREQUENCY BAND
     // ========================================================
     function buildFreqBand() {
-      // Station labels
       STATIONS.forEach(s => {
         const label = document.createElement('span');
         label.className = 'station-label';
@@ -208,8 +222,6 @@
         label.dataset.stationId = s.id;
         freqStationsEl.appendChild(label);
       });
-
-      // Station markers on track
       STATIONS.forEach(s => {
         const marker = document.createElement('div');
         marker.className = 'station-marker';
@@ -220,10 +232,11 @@
     buildFreqBand();
 
     // ========================================================
-    // STREAMS (all alive, mute/unmute switching)
+    // STREAMS
     // ========================================================
     function streamUrl(mount) {
-      return `http://${location.hostname}:8000/${mount}`;
+      // Use same-origin proxy to avoid cross-origin issues
+      return `/stream/${mount}`;
     }
 
     function initStreams() {
@@ -233,13 +246,20 @@
         a.volume = 0;
         a.preload = 'none';
         streams[s.mount] = a;
+        console.log(`[radio] created stream: ${s.mount}`);
 
-        a.addEventListener('error', () => {
-          console.error(`[radio] ${s.mount} stream error, reconnecting...`);
+        a.addEventListener('error', (e) => {
+          const code = a.error ? a.error.code : '?';
+          const msg = a.error ? a.error.message : 'unknown';
+          console.error(`[radio] ${s.mount} stream error (code=${code}): ${msg}, reconnecting in 5s`);
           setTimeout(() => {
             a.src = streamUrl(s.mount);
             a.load();
-            if (userHasInteracted) a.play().catch(() => {});
+            if (userHasInteracted) a.play().then(() => {
+              console.log(`[radio] ${s.mount} reconnected`);
+            }).catch(err => {
+              console.error(`[radio] ${s.mount} reconnect play failed:`, err.message);
+            });
           }, 5000);
         });
       });
@@ -247,15 +267,43 @@
 
     function startAllStreams() {
       for (const [mount, a] of Object.entries(streams)) {
-        a.play().catch(() => {});
+        a.play().then(() => {
+          console.log(`[radio] ${mount} stream playing`);
+        }).catch(err => {
+          console.error(`[radio] ${mount} stream play failed:`, err.message);
+        });
       }
-      applyStreamVolumes();
+      console.log('[radio] all streams started');
+      computeStreamVolumes();
     }
 
-    function applyStreamVolumes() {
-      const vol = volume / 100;
-      for (const [mount, a] of Object.entries(streams)) {
-        a.volume = (lockedStation && mount === lockedStation.mount) ? vol : 0;
+    // ========================================================
+    // PROXIMITY-BASED VOLUME BLENDING
+    // ========================================================
+    function computeStreamVolumes() {
+      const master = volume / 100;
+      if (!isPowerOn) {
+        for (const a of Object.values(streams)) a.volume = 0;
+        return;
+      }
+
+      for (const s of STATIONS) {
+        const a = streams[s.mount];
+        if (!a) continue;
+        const dist = Math.abs(tuning - s.pos);
+
+        let streamVol;
+        if (dist <= LOCK_IN) {
+          // Dead-on: full volume
+          streamVol = master;
+        } else if (dist <= BLEND_RADIUS) {
+          // Blend zone: linear fade from 1 at lock edge to 0 at blend edge
+          const t = (BLEND_RADIUS - dist) / (BLEND_RADIUS - LOCK_IN);
+          streamVol = t * master;
+        } else {
+          streamVol = 0;
+        }
+        a.volume = streamVol;
       }
     }
 
@@ -265,8 +313,8 @@
     function initAudioContext() {
       if (audioCtx) return;
       audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      console.log('[radio] AudioContext created, sampleRate:', audioCtx.sampleRate);
 
-      // Create 2s white noise buffer
       const bufferSize = audioCtx.sampleRate * 2;
       const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
       const data = buffer.getChannelData(0);
@@ -284,6 +332,7 @@
       staticSource.connect(staticGain);
       staticGain.connect(audioCtx.destination);
       staticSource.start();
+      console.log('[radio] static noise engine running');
     }
 
     function updateStaticGain() {
@@ -294,20 +343,17 @@
         return;
       }
 
-      // Distance to nearest station
       let minDist = Infinity;
       for (const s of STATIONS) {
         const d = Math.abs(tuning - s.pos);
         if (d < minDist) minDist = d;
       }
 
-      // Map distance to gain: at station (<=LOCK_TOLERANCE) = 0, far away = full
       let staticLevel;
-      if (minDist <= LOCK_TOLERANCE) {
+      if (minDist <= LOCK_IN) {
         staticLevel = 0;
       } else {
-        // Normalize: LOCK_TOLERANCE..50 -> 0..1
-        staticLevel = Math.min((minDist - LOCK_TOLERANCE) / 20, 1);
+        staticLevel = Math.min((minDist - LOCK_IN) / 20, 1);
       }
 
       const targetGain = staticLevel * (volume / 100) * 0.08;
@@ -315,35 +361,28 @@
     }
 
     // ========================================================
-    // STATION LOCKING
+    // STATION LOCKING (display only -- audio uses blend)
+    // Hysteresis: lock at LOCK_IN, unlock at LOCK_OUT
     // ========================================================
     function findLockedStation() {
+      // If already locked, use wider LOCK_OUT band to prevent flutter
+      if (lockedStation) {
+        const dist = Math.abs(tuning - lockedStation.pos);
+        if (dist <= LOCK_OUT) return lockedStation;
+      }
+      // Otherwise, need to be within tight LOCK_IN to acquire lock
       for (const s of STATIONS) {
-        if (Math.abs(tuning - s.pos) <= LOCK_TOLERANCE) return s;
+        if (Math.abs(tuning - s.pos) <= LOCK_IN) return s;
       }
       return null;
     }
 
-    function updateLock() {
-      const prev = lockedStation;
-      lockedStation = isPowerOn ? findLockedStation() : null;
-      applyStreamVolumes();
-      updateStaticGain();
-      updateDisplay();
-      updateFreqBand();
-
-      if (lockedStation && (!prev || prev.id !== lockedStation.id)) {
-        fetchNowPlaying();
-        fetchHistory();
-      }
-    }
-
     // ========================================================
-    // DISPLAY
+    // DISPLAY -- only rebuilds DOM when display state changes
     // ========================================================
-    function updateDisplay() {
+    function rebuildDisplay() {
       if (!isPowerOn) {
-        displayEl.innerHTML = '<span class="tune-prompt">TUNE IN</span>';
+        displayEl.innerHTML = '<div class="tune-prompt">TUNE IN</div>';
         return;
       }
       if (lockedStation) {
@@ -352,34 +391,94 @@
           `<div class="display-name">${lockedStation.name.toUpperCase()}</div>` +
           `<div class="display-format">${lockedStation.format}</div>` +
           `<div class="display-track" id="display-track"></div>`;
-        // Restore track info if we have it
-        fetchNowPlaying();
       } else {
-        displayEl.innerHTML = '<span class="static-indicator">STATIC</span>';
+        displayEl.innerHTML = '<div class="static-indicator">STATIC</div>';
       }
     }
 
-    function updateFreqBand() {
-      // Move tuning indicator
-      tuningIndicator.style.left = tuning + '%';
-      tuningIndicator.classList.toggle('locked', !!lockedStation);
-
-      // Highlight active station label
+    function updateFreqLabels() {
       freqStationsEl.querySelectorAll('.station-label').forEach(el => {
         el.classList.toggle('active', lockedStation && el.dataset.stationId === lockedStation.id);
       });
     }
 
     // ========================================================
-    // DIAL INTERACTION (delta-angle tracking)
+    // UNIFIED UPDATE -- called on every tuning/volume change
+    // Separates cheap per-frame work from expensive DOM rebuilds
     // ========================================================
-    function getAngle(el, e) {
+    function updateTuningFrame() {
+      // Cheap: dial rotation + freq indicator position
+      setDialRotation('tuning-group', tuning);
+      tuningValueEl.textContent = `[${Math.round(tuning)}]`;
+      tuningIndicator.style.left = tuning + '%';
+
+      // Cheap: audio levels (smooth, no DOM)
+      computeStreamVolumes();
+      updateStaticGain();
+
+      // Check if display state actually changed
+      const nearest = findLockedStation();
+      const newMode = !isPowerOn ? 'off' : nearest ? nearest.id : 'static';
+
+      tuningIndicator.classList.toggle('locked', !!nearest);
+
+      if (newMode !== displayMode) {
+        const prevMode = displayMode;
+        displayMode = newMode;
+        lockedStation = nearest;
+        console.log(`[radio] display: ${prevMode} -> ${newMode}`,
+          nearest ? `(${nearest.name})` : '',
+          `tuning=${tuning.toFixed(1)}`);
+        rebuildDisplay();
+        updateFreqLabels();
+
+        if (nearest) {
+          fetchNowPlaying();
+          fetchHistory();
+        }
+      } else {
+        lockedStation = nearest;
+      }
+    }
+
+    function updateVolumeFrame() {
+      setDialRotation('volume-group', volume);
+      volumeValueEl.textContent = `[${Math.round(volume)}]`;
+      computeStreamVolumes();
+      updateStaticGain();
+    }
+
+    // ========================================================
+    // DIAL INTERACTION
+    // Incremental delta with atan2 wrap normalization.
+    // Distance-based sensitivity: further from center = finer control.
+    // Dead zone near center prevents wild swings.
+    // Per-frame delta capped to prevent jumps.
+    // ========================================================
+    let dialCenterX = 0;
+    let dialCenterY = 0;
+    let dialRadius = 0;
+    let dragMoved = false;  // track if drag moved enough to suppress click
+
+    const DEAD_ZONE   = 12;   // px -- ignore movement within this radius
+    const SENSITIVITY  = 0.7;  // overall sensitivity multiplier
+    const MAX_DELTA    = 6;    // max value change per frame
+
+    function cacheDialCenter(el) {
       const rect = el.getBoundingClientRect();
-      const cx = rect.left + rect.width / 2;
-      const cy = rect.top + rect.height / 2;
+      dialCenterX = rect.left + rect.width / 2;
+      dialCenterY = rect.top + rect.height / 2;
+      dialRadius = rect.width / 2;
+    }
+
+    function getPointerInfo(e) {
       const clientX = e.touches ? e.touches[0].clientX : e.clientX;
       const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-      return Math.atan2(clientY - cy, clientX - cx);
+      const dx = clientX - dialCenterX;
+      const dy = clientY - dialCenterY;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      const angle = Math.atan2(dy, dx);
+      return { angle, dist };
     }
 
     function handleDialStart(which, el, e) {
@@ -387,8 +486,11 @@
       e.preventDefault();
       e.stopPropagation();
       dragging = which;
-      dragStartAngle = getAngle(el, e);
-      dragStartValue = which === 'tuning' ? tuning : volume;
+      dragMoved = false;
+      cacheDialCenter(el);
+      const info = getPointerInfo(e);
+      prevAngle = info.angle;
+      accumValue = which === 'tuning' ? tuning : volume;
     }
 
     tuningDialEl.addEventListener('mousedown', e => handleDialStart('tuning', tuningDialEl, e));
@@ -396,59 +498,114 @@
     volumeDialEl.addEventListener('mousedown', e => handleDialStart('volume', volumeDialEl, e));
     volumeDialEl.addEventListener('touchstart', e => handleDialStart('volume', volumeDialEl, e), { passive: false });
 
+    // Click-to-tune: click on the tuning dial to jump to nearest station
+    // Only fires if no meaningful drag occurred (dragMoved stays false)
+    tuningDialEl.addEventListener('click', e => {
+      if (!isPowerOn || dragMoved) return;
+      cacheDialCenter(tuningDialEl);
+      const { angle } = getPointerInfo(e);
+      // Map angle to value: -135deg = 0, +135deg = 100
+      let deg = (angle * 180 / Math.PI) + 90;
+      if (deg < 0) deg += 360;
+      if (deg > 315) deg -= 360;
+      const value = Math.max(0, Math.min(100, ((deg + 45) / 270) * 100));
+
+      let nearest = STATIONS[0];
+      let minDist = Infinity;
+      for (const s of STATIONS) {
+        const d = Math.abs(value - s.pos);
+        if (d < minDist) { minDist = d; nearest = s; }
+      }
+      tuning = nearest.pos;
+      accumValue = tuning;
+      displayMode = '__force__';
+      updateTuningFrame();
+    });
+
     function handleMove(e) {
       if (!dragging) return;
       e.preventDefault();
 
-      const el = dragging === 'tuning' ? tuningDialEl : volumeDialEl;
-      const angle = getAngle(el, e);
-      const delta = angle - dragStartAngle;
-      const deltaValue = (delta / (Math.PI * 2)) * 100;
-      const newValue = Math.max(0, Math.min(100, dragStartValue + deltaValue));
+      const { angle, dist } = getPointerInfo(e);
+
+      // Dead zone: ignore when cursor is very near dial center
+      if (dist < DEAD_ZONE) {
+        prevAngle = angle;
+        return;
+      }
+
+      // Incremental delta, normalized to [-PI, PI]
+      let delta = angle - prevAngle;
+      if (delta > Math.PI) delta -= 2 * Math.PI;
+      if (delta < -Math.PI) delta += 2 * Math.PI;
+      prevAngle = angle;
+
+      // Distance-based sensitivity: further from center = finer control
+      // At the edge (dist == radius), sensitivity is 1x.
+      // Closer to center, sensitivity increases (but dead zone catches the extreme).
+      const distFactor = Math.min(dist / (dialRadius * 0.6), 1.5);
+      const scaledDelta = delta * SENSITIVITY * distFactor;
+
+      let deltaValue = (scaledDelta / (Math.PI * 2)) * 100;
+
+      // Cap per-frame delta to prevent jumps
+      deltaValue = Math.max(-MAX_DELTA, Math.min(MAX_DELTA, deltaValue));
+
+      accumValue = Math.max(0, Math.min(100, accumValue + deltaValue));
+
+      // Mark drag as moved if value changed meaningfully
+      if (Math.abs(deltaValue) > 0.3) dragMoved = true;
 
       if (dragging === 'tuning') {
-        tuning = newValue;
-        setDialRotation('tuning-group', tuning);
-        tuningValueEl.textContent = `[${Math.round(tuning)}]`;
-        updateLock();
+        tuning = accumValue;
       } else {
-        volume = newValue;
-        setDialRotation('volume-group', volume);
-        volumeValueEl.textContent = `[${Math.round(volume)}]`;
-        applyStreamVolumes();
-        updateStaticGain();
+        volume = accumValue;
+      }
+
+      // Batch to next animation frame
+      if (!rafPending) {
+        rafPending = true;
+        const which = dragging;
+        requestAnimationFrame(() => {
+          rafPending = false;
+          if (which === 'tuning') updateTuningFrame();
+          else updateVolumeFrame();
+        });
       }
     }
 
     function handleEnd() {
       if (!dragging) return;
+      const which = dragging;
       dragging = null;
       document.body.style.overflow = '';
       document.body.style.userSelect = '';
+
+      if (which === 'tuning') updateTuningFrame();
+      else updateVolumeFrame();
     }
 
-    document.addEventListener('mousemove', handleMove);
+    document.addEventListener('mousemove', handleMove, { passive: false });
     document.addEventListener('mouseup', handleEnd);
-    document.addEventListener('touchmove', handleMove, { passive: false });
-    document.addEventListener('touchend', handleEnd);
-
-    // Prevent body scroll during dial drag
     document.addEventListener('touchmove', e => {
       if (dragging) {
-        e.preventDefault();
         document.body.style.overflow = 'hidden';
         document.body.style.userSelect = 'none';
       }
+      handleMove(e);
     }, { passive: false });
+    document.addEventListener('touchend', handleEnd);
 
     // ========================================================
     // POWER TOGGLE
     // ========================================================
     powerSwitch.addEventListener('change', () => {
       isPowerOn = powerSwitch.checked;
+      console.log(`[radio] power: ${isPowerOn ? 'ON' : 'OFF'}`);
       powerOffLabel.classList.toggle('active', !isPowerOn);
       powerOnLabel.classList.toggle('active', isPowerOn);
-      updateLock();
+      displayMode = '__force__'; // force display rebuild
+      updateTuningFrame();
     });
 
     // ========================================================
@@ -461,19 +618,17 @@
       initStreams();
       startAllStreams();
 
-      // Power on and set tuning to first station
       isPowerOn = true;
       powerSwitch.checked = true;
       powerOffLabel.classList.remove('active');
       powerOnLabel.classList.add('active');
       tuning = STATIONS[0].pos;
+      console.log(`[radio] TUNE IN -> power on, tuning to ${STATIONS[0].name} (pos ${STATIONS[0].pos})`);
 
-      setDialRotation('tuning-group', tuning);
       setDialRotation('volume-group', volume);
-      tuningValueEl.textContent = `[${Math.round(tuning)}]`;
       volumeValueEl.textContent = `[${Math.round(volume)}]`;
-
-      updateLock();
+      displayMode = '__force__';
+      updateTuningFrame();
     });
 
     // ========================================================
@@ -586,9 +741,10 @@
     setDialRotation('volume-group', volume);
     tuningValueEl.textContent = `[${Math.round(tuning)}]`;
     volumeValueEl.textContent = `[${Math.round(volume)}]`;
-    updateDisplay();
-    updateFreqBand();
+    displayMode = '__force__';
+    updateTuningFrame();
     unmuteOverlay.classList.remove('hidden');
+    console.log('[radio] boot complete');
   </script>
 </body>
 </html>

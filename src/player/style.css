@@ -1,15 +1,20 @@
 :root {
-  --bg: #0b0e14;
-  --bg-elevated: #141820;
-  --fg: #c9d1d9;
-  --fg-muted: #6e7681;
-  --fg-bright: #e6edf3;
-  --accent: #7eb8f6;
-  --accent-dim: #4a6a8f;
-  --green: #7ee6a8;
-  --orange: #e6a855;
-  --red: #f47067;
-  --border: #21262d;
+  /* Wada Sanzo palette -- pigment-derived chromatic neutrals */
+  --bg: #111314;
+  --bg-elevated: #1a1f22;
+  --bg-recessed: #0d0e0f;
+  --fg: #b6bfc1;
+  --fg-muted: #7a7d75;
+  --fg-bright: #f0e8c9;
+  --accent: #0093a5;
+  --accent-dim: #2a6370;
+  --green: #00b49b;
+  --orange: #d4a83a;
+  --red: #a62c37;
+  --border: #2c3033;
+
+  /* Noise texture -- tiny SVG for grain overlay */
+  --noise: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E");
 }
 
 @font-face {
@@ -30,6 +35,20 @@ body {
   min-height: 100vh;
   display: flex;
   flex-direction: column;
+  position: relative;
+}
+
+/* Grain overlay on entire page */
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background-image: var(--noise);
+  background-repeat: repeat;
+  background-size: 256px 256px;
+  pointer-events: none;
+  z-index: 999;
+  mix-blend-mode: overlay;
 }
 
 header {
@@ -67,9 +86,10 @@ main {
 .station-display {
   border: 1px solid var(--border);
   background: var(--bg-elevated);
+  box-shadow: inset 0 1px 4px rgba(0, 0, 0, 0.35);
   padding: 1.25rem 1.5rem;
   margin-bottom: 1.5rem;
-  min-height: 4.5rem;
+  height: 9rem;
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -146,6 +166,7 @@ main {
 .freq-band {
   border: 1px solid var(--border);
   background: var(--bg-elevated);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.3);
   padding: 1rem 1.5rem 0.75rem;
   margin-bottom: 1.5rem;
   position: relative;
@@ -185,6 +206,7 @@ main {
   position: relative;
   height: 6px;
   background: var(--border);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.4);
   margin-bottom: 0.25rem;
 }
 
@@ -254,7 +276,6 @@ main {
   cursor: grab;
   touch-action: none;
   user-select: none;
-  overflow: hidden;
 }
 
 .tuning-dial {
@@ -280,9 +301,9 @@ main {
 }
 
 .dial-knob-ring {
-  fill: var(--bg-elevated);
   stroke: var(--fg-muted);
-  stroke-width: 1.5;
+  stroke-width: 1;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.4));
 }
 
 .dial-knob-inner {
@@ -294,8 +315,8 @@ main {
 
 .dial-tick {
   stroke: var(--fg-muted);
-  stroke-width: 0.8;
-  opacity: 0.6;
+  stroke-width: 0.7;
+  opacity: 0.45;
 }
 
 .dial-indicator {
@@ -342,7 +363,7 @@ main {
   width: 40px;
   height: 20px;
   border: 1px solid var(--border);
-  background: var(--bg);
+  background: var(--bg-recessed);
   cursor: pointer;
   -webkit-appearance: none;
   appearance: none;
@@ -385,7 +406,7 @@ main {
 }
 
 .call-in-btn:hover {
-  background: rgba(230, 168, 85, 0.1);
+  background: color-mix(in srgb, var(--orange) 12%, transparent);
 }
 
 .call-in-btn.recording {
@@ -416,6 +437,7 @@ main {
   padding: 1.5rem;
   margin-bottom: 2rem;
   background: var(--bg-elevated);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.25);
 }
 
 .history h2 {
@@ -473,6 +495,7 @@ main {
   border: 1px solid var(--border);
   padding: 1.5rem;
   background: var(--bg-elevated);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.25);
 }
 
 .transcript h2 {
@@ -509,7 +532,8 @@ footer {
 .unmute-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(11, 14, 20, 0.92);
+  background: color-mix(in srgb, var(--bg) 94%, transparent);
+  backdrop-filter: blur(4px);
   display: flex;
   align-items: center;
   justify-content: center;
