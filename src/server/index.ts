@@ -1,4 +1,5 @@
 import { Elysia } from "elysia";
+import { cors } from "@elysiajs/cors";
 import { staticPlugin } from "@elysiajs/static";
 import { join } from "node:path";
 import { adminRoutes } from "./admin.js";
@@ -14,6 +15,7 @@ const PLAYER_DIR = join(import.meta.dir, "..", "player");
 const ACTIVE_CHANNELS: Channel[] = ["morning-zoo", "crate-digger", "conspiracy-hour", "request-line"];
 
 const app = new Elysia()
+  .use(cors({ origin: true }))
   .use(staticPlugin({ assets: PLAYER_DIR, prefix: "/" }))
   .get("/", () => Bun.file(join(PLAYER_DIR, "index.html")))
   .get("/health", () => ({ status: "ok", timestamp: new Date().toISOString() }))
