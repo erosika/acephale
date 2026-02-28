@@ -90,16 +90,18 @@ async function sendTelnet(port: number, command: string): Promise<string> {
 // --- Public API ---
 
 export async function queueTrack(
-  channel: Channel,
+  channel: Channel | "static",
   filepath: string,
   metadata?: TrackMetadata
 ): Promise<string> {
+  // If static, hijack the request line temporarily since they share a port for now
+  const targetChannel = channel === "static" ? "request-line" : channel;
   const ports = getChannelPorts();
-  const queueId = QUEUE_IDS[channel];
+  const queueId = QUEUE_IDS[targetChannel];
   const containerPath = hostToContainerPath(filepath);
   const uri = metadata ? formatAnnotate(containerPath, metadata) : containerPath;
   console.log(`[stream] ${queueId}.push ${uri}`);
-  return sendTelnet(ports[channel], `${queueId}.push ${uri}`);
+  return sendTelnet(ports[targetChannel], `${queueId}.push ${uri}`);
 }
 
 function formatAnnotate(filepath: string, meta: TrackMetadata): string {

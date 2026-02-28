@@ -15,6 +15,7 @@ import { queueTrack } from "../../core/stream.js";
 import { setNowPlaying } from "../../core/nowplaying.js";
 import { logArchiveEntry } from "../../core/archive.js";
 import { generateLyriaCustomTrack } from "../../core/lyria.js";
+import { pickNextCall, processCallWithLyriaUnderbed } from "../../core/calls.js";
 
 // --- Types ---
 
@@ -341,6 +342,49 @@ export async function runRequestLineLoop(): Promise<never> {
 
   while (true) {
     try {
+      // 1. Process any calls in queue
+      let callWaitMs = 0;
+      let handledCall = false;
+      const call = pickNextCall("request-line");
+      
+      if (call) {
+        console.log(`[request-line] Handling call: ${call.id}`);
+        try {
+          const processed = await processCallWithLyriaUnderbed(call);
+          
+          // Queue the call to the stream
+          await queueTrack("request-line", processed.mp3Path, {
+            title: "Listener Call",
+            artist: "Anonymous",
+            album: "Acephale Radio",
+          });
+          
+          setNowPlaying("request-line", {
+            title: "Listener Call",
+            artist: "Anonymous",
+          });
+          
+          logArchiveEntry({
+            station: "request-line",
+            timestamp: Date.now(),
+            title: "Listener Call",
+            artist: "Anonymous",
+            duration: Math.round(processed.durationMs / 1000),
+          });
+          
+          callWaitMs = processed.durationMs + 2000;
+          handledCall = true;
+        } catch (err) {
+          console.error(`[request-line] Failed to process call ${call.id}:`, err);
+        }
+      }
+
+      // If we handled a call, we sleep for its duration before picking the next track
+      if (handledCall) {
+        console.log(`[request-line] Waiting ~${Math.round(callWaitMs / 1000)}s for call to finish playing...`);
+        await Bun.sleep(callWaitMs);
+      }
+
       // Fetch memories
       let memories: string[] = [];
       try {

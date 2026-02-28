@@ -6,6 +6,7 @@ import { STATIONS, type StationId } from "../core/config.js";
 import { getStatus, skip, getQueue, type Channel } from "../core/stream.js";
 import { getNowPlaying, getAllNowPlaying } from "../core/nowplaying.js";
 import { getArchiveEntries } from "../core/archive.js";
+import { addCall } from "../core/calls.js";
 
 const PLAYER_DIR = join(import.meta.dir, "..", "player");
 
@@ -76,6 +77,21 @@ const app = new Elysia()
     const station = query.station ? String(query.station) : undefined;
     const limit = query.limit ? parseInt(String(query.limit), 10) : 50;
     return getArchiveEntries({ station, limit });
+  })
+
+  .post("/call", async ({ body, set }) => {
+    try {
+      const { station, text } = body as { station: string; text: string };
+      if (!station || !text) {
+        set.status = 400;
+        return { error: "Missing station or text" };
+      }
+      const id = addCall(station, text, "user");
+      return { ok: true, id };
+    } catch (err) {
+      set.status = 500;
+      return { error: String(err) };
+    }
   })
 
   // Proxy Icecast streams so browser stays on same origin (no CORS issues)

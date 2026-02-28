@@ -7,7 +7,7 @@
     "zoo": "bun run src/stations/morning-zoo/loop.ts",
     "crate": "bun run src/stations/crate-digger/loop.ts",
     "conspiracy": "bun run src/stations/conspiracy-hour/loop.ts",
-    "request": "bun run src/stations/request-line/loop.ts",
+    "request": "bun run src/stations/static/loop.ts",
     "all": "bun run src/main.ts",
     "typecheck": "tsc --noEmit"
   },
