@@ -174,13 +174,13 @@ export async function saveZooEpisode(
 // Callers: Add listener calls to a station's session so the DJ remembers them
 export async function saveCall(
   station: string,
-  callerId: string,
+  callerId: string, // we should use the caller's distinct ID so they are their own peer
   text: string
 ): Promise<void> {
   const { session, peers } = await getChannel(station, [callerId]);
   const peer = peers[callerId];
   await session.addMessages([
-    peer.message(text, { metadata: { isCall: true } })
+    peer.message(`[Listener Call]: "${text}"`, { metadata: { isCall: true } })
   ]);
 }
 
