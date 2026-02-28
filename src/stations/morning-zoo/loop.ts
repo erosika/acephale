@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { loadAgentRoster, getEnv } from "../../core/config.js";
-import { getAgentMemory, startEpisodeSession, saveEpisodeMemory } from "../../core/honcho.js";
+import { getAgentMemory, saveZooEpisode } from "../../core/honcho.js";
 import { queueTrack } from "../../core/stream.js";
 import { getZooHosts, type ZooHost } from "./hosts.js";
 import { gatherSources } from "./sources.js";
@@ -52,18 +52,15 @@ export async function generateEpisode(): Promise<EpisodeResult> {
   const rendered = await renderEpisode(script, roster, episodesDir);
   console.log(`[morning-zoo] Rendered: ${rendered.mp3Path} (~${Math.round(rendered.durationMs / 1000)}s)`);
 
-  // 6. Save transcript to Honcho
-  for (const host of hostsWithMemory) {
-    try {
-      const { peer, session } = await startEpisodeSession(host.honchoUser, {
-        episodeTitle: script.title,
-        topic: script.topic,
-        timestamp,
-      });
-      await saveEpisodeMemory(peer, session, script.lines);
-    } catch (err) {
-      console.log(`[morning-zoo] Failed to save memory for ${host.name}: ${err}`);
+  // 6. Save transcript to Honcho -- one session, each line attributed to correct peer
+  try {
+    const peerMap: Record<string, string> = {};
+    for (const host of hostsWithMemory) {
+      peerMap[host.name] = host.honchoUser;
     }
+    await saveZooEpisode(peerMap, script.title, script.topic, script.lines);
+  } catch (err) {
+    console.log(`[morning-zoo] Failed to save episode memory: ${err}`);
   }
 
   return { script, rendered, timestamp };
@@ -84,15 +81,24 @@ export async function runLoop(): Promise<void> {
   const intervalMinutes = parseInt(getEnv("EPISODE_INTERVAL_MINUTES", "15"), 10);
   console.log(`[morning-zoo] Starting episode loop (interval: ${intervalMinutes}min)`);
 
+  let episodeCount = 0;
+
   while (true) {
     try {
       const result = await generateEpisode();
       await queueEpisode(result);
+      episodeCount++;
+
+      // Wait for episode to play + interval gap, start prepping next before gap ends
+      const totalMs = result.rendered.durationMs + (intervalMinutes * 60 * 1000);
+      const prepLeadMs = Math.min(30000, totalMs * 0.3);
+      const waitMs = Math.max(5000, totalMs - prepLeadMs);
+      console.log(`[morning-zoo] Episode #${episodeCount} queued. Next prep in ~${Math.round(waitMs / 1000)}s`);
+      await Bun.sleep(waitMs);
     } catch (err) {
       console.error(`[morning-zoo] Episode generation failed:`, err);
+      await Bun.sleep(15000);
     }
-
-    await Bun.sleep(intervalMinutes * 60 * 1000);
   }
 }
 

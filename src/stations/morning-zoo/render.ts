@@ -1,7 +1,7 @@
 import { join } from "node:path";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync, unlinkSync } from "node:fs";
 import { synthesizeSpeech } from "../../core/tts.js";
-import { concatAudio, normalizeAudio, convertToMp3, type AudioSegment } from "../../core/audio.js";
+import { concatAudio, normalizeAudio, convertToMp3, generateSilence, type AudioSegment } from "../../core/audio.js";
 import type { AgentConfig } from "../../core/config.js";
 import type { EpisodeScript } from "./script.js";
 
@@ -30,11 +30,12 @@ export async function renderEpisode(
 
   const segments: AudioSegment[] = [];
   let totalDurationMs = 0;
+  let prevSpeaker: string | null = null;
 
-  for (const line of script.lines) {
-    // Skip music cues (they'd be Radiooooo tracks in production)
-    if (line.text.startsWith("[MUSIC:")) continue;
+  const spokenLines = script.lines.filter((l) => !l.text.startsWith("[MUSIC:"));
 
+  for (let i = 0; i < spokenLines.length; i++) {
+    const line = spokenLines[i];
     const agent = roster.find((a) => a.name === line.speaker);
     const voiceName = agent?.voice || "en-US-Chirp3-HD-Puck";
 
@@ -42,22 +43,30 @@ export async function renderEpisode(
       ssml: !!line.ssml_hints,
     });
 
+    // Insert gap before this segment (not before the first one)
+    if (prevSpeaker !== null) {
+      const sameSpeaker = line.speaker === prevSpeaker;
+      const gapMs = sameSpeaker ? 250 : 700;
+      const silPath = join(outputDir, `sil-${Date.now()}-${i}.wav`);
+      await generateSilence(gapMs, silPath);
+      segments.push({ audio: readFileSync(silPath), label: `gap-${gapMs}ms` });
+      totalDurationMs += gapMs;
+      try { unlinkSync(silPath); } catch {}
+    }
+
     segments.push({
       audio: result.audio,
       label: `${line.speaker}: ${line.text.slice(0, 40)}...`,
     });
 
     totalDurationMs += result.durationMs;
+    prevSpeaker = line.speaker;
   }
 
-  // 300ms between same speaker, 800ms between different speakers
-  // Using 500ms average for MVP
-  await concatAudio(segments, wavPath, 500);
+  // Concatenate with no additional gaps (gaps are already in segments)
+  await concatAudio(segments, wavPath, 0);
   const normPath = await normalizeAudio(wavPath);
   await convertToMp3(normPath, mp3Path);
-
-  const gapTotal = (segments.length - 1) * 500;
-  totalDurationMs += gapTotal;
 
   return { mp3Path, wavPath: normPath, durationMs: totalDurationMs, lineCount: script.lines.length };
 }
