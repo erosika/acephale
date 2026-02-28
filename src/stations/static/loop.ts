@@ -108,7 +108,7 @@ async function renderBleedEffect(type: string): Promise<{ mp3Path: string; durat
 
   if (type === "pirate") {
     promptText = "WARNING. UNREGISTERED TRANSMISSION. THEY ARE LYING TO YOU ABOUT THE NUMBERS. END TRANSMISSION.";
-    voiceName = "Onyx";
+    voiceName = "Charon"; // Swapped out Onyx since it isn't supported, using Charon
   } else if (type === "conspiracy_leak") {
     promptText = "The frequencies... they're bleeding together. The grid is a cage.";
     voiceName = "Charon"; // Nyx's voice

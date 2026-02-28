@@ -91,6 +91,10 @@ export async function processCallVoice(
       "-c:a", "pcm_s16le",
       speechWav
     ]);
+    
+    // We explicitly wait a small buffer for the file system to catch up on mac
+    await new Promise(r => setTimeout(r, 100));
+
     actualDurationMs = (await probeDuration(speechWav)) * 1000;
     try { unlinkSync(rawWebm); } catch {}
   } else {
