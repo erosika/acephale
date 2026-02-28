@@ -67,11 +67,11 @@ ${evidenceBlock || "Nothing new... which is suspicious in itself."}
 ${memories.length > 0 ? `Your memories:\n${memories.map(m => `- ${m}`).join("\n")}` : ""}
 
 Generate a 2-3 minute monologue for your show. Include:
-- Reference to at least one active conspiracy thread
-- Incorporate the new evidence (distort it to fit your theories)
-- Suspicious observations about other Acephale Radio DJs
+- Reference to at least one active conspiracy thread. Be highly specific and detail-oriented. Give concrete names, dates, technologies, or hypothetical mechanisms rather than vague concepts.
+- Incorporate the new evidence (distort it to fit your theories) in a granular, highly descriptive way.
+- Suspicious observations about other Acephale Radio DJs. Be hyper-specific about exactly what they did or said.
 - Address listeners directly ("you out there know what I'm talking about")
-- Paranoid but surprisingly insightful analysis
+- Paranoid but surprisingly insightful analysis that goes deep into technical or systemic rabbit holes. Avoid generic statements like "everything is connected".
 
 Respond with JSON:
 {
