@@ -8,6 +8,16 @@ export type AudioSegment = {
   label?: string;
 };
 
+export type TrackMetadata = {
+  title?: string;
+  artist?: string;
+  album?: string;
+  year?: string;
+  genre?: string;
+  comment?: string;
+  station?: string;
+};
+
 // --- ffmpeg Helpers ---
 
 async function runFfmpeg(args: string[]): Promise<void> {
@@ -73,15 +83,117 @@ export async function normalizeAudio(input: string, output?: string): Promise<st
   return out;
 }
 
-export async function convertToMp3(input: string, output?: string): Promise<string> {
+export async function convertToMp3(
+  input: string,
+  output?: string,
+  metadata?: TrackMetadata
+): Promise<string> {
   const out = output || input.replace(/\.wav$/, ".mp3");
+  const args = ["-i", input, "-codec:a", "libmp3lame", "-b:a", "192k"];
+  if (metadata) args.push(...metadataFlags(metadata));
+  args.push(out);
+  await runFfmpeg(args);
+  return out;
+}
+
+export async function remuxWithMetadata(
+  input: string,
+  metadata: TrackMetadata,
+  output?: string
+): Promise<string> {
+  const out = output || input.replace(/\.mp3$/, "-tagged.mp3");
+
+  // Probe input to check if it's actually MP3 or needs re-encoding
+  const probe = Bun.spawn(
+    ["ffprobe", "-v", "quiet", "-show_entries", "stream=codec_name", "-of", "csv=p=0", input],
+    { stdout: "pipe", stderr: "pipe" }
+  );
+  const probeOut = await new Response(probe.stdout).text();
+  const isMP3 = probeOut.trim().split("\n").some((l) => l.trim() === "mp3");
+
+  if (isMP3) {
+    // Pure remux -- no re-encoding
+    await runFfmpeg([
+      "-i", input,
+      "-codec", "copy",
+      "-map_metadata", "-1",
+      ...metadataFlags(metadata),
+      out,
+    ]);
+  } else {
+    // Re-encode to MP3 (input is M4A/AAC/OGG/etc)
+    await runFfmpeg([
+      "-i", input,
+      "-vn",
+      "-codec:a", "libmp3lame",
+      "-b:a", "192k",
+      ...metadataFlags(metadata),
+      out,
+    ]);
+  }
+
+  return out;
+}
+
+function metadataFlags(meta: TrackMetadata): string[] {
+  const flags: string[] = [];
+  if (meta.title) flags.push("-metadata", `title=${meta.title}`);
+  if (meta.artist) flags.push("-metadata", `artist=${meta.artist}`);
+  if (meta.album) flags.push("-metadata", `album=${meta.album}`);
+  if (meta.year) flags.push("-metadata", `date=${meta.year}`);
+  if (meta.genre) flags.push("-metadata", `genre=${meta.genre}`);
+  if (meta.comment) flags.push("-metadata", `comment=${meta.comment}`);
+  if (meta.station) flags.push("-metadata", `album_artist=${meta.station}`);
+  return flags;
+}
+
+// --- Duration Probe ---
+
+export async function probeDuration(input: string): Promise<number> {
+  const proc = Bun.spawn(
+    ["ffprobe", "-v", "quiet", "-show_entries", "format=duration", "-of", "csv=p=0", input],
+    { stdout: "pipe", stderr: "pipe" }
+  );
+  const out = await new Response(proc.stdout).text();
+  return parseFloat(out.trim()) || 0;
+}
+
+// --- Fade In/Out ---
+
+export async function applyFades(
+  input: string,
+  opts: { fadeInSec?: number; fadeOutSec?: number } = {}
+): Promise<string> {
+  const fadeIn = opts.fadeInSec ?? 0;
+  const fadeOut = opts.fadeOutSec ?? 0;
+  if (fadeIn === 0 && fadeOut === 0) return input;
+
+  const duration = await probeDuration(input);
+  if (duration <= 0) return input;
+
+  const filters: string[] = [];
+  if (fadeIn > 0) {
+    filters.push(`afade=t=in:st=0:d=${fadeIn}`);
+  }
+  if (fadeOut > 0) {
+    const fadeStart = Math.max(0, duration - fadeOut);
+    filters.push(`afade=t=out:st=${fadeStart.toFixed(3)}:d=${fadeOut}`);
+  }
+
+  const out = input.replace(/\.mp3$/, "-faded.mp3");
   await runFfmpeg([
     "-i", input,
+    "-af", filters.join(","),
     "-codec:a", "libmp3lame",
     "-b:a", "192k",
     out,
   ]);
-  return out;
+
+  // Replace original with faded version
+  try { unlinkSync(input); } catch {}
+  const { renameSync } = await import("node:fs");
+  renameSync(out, input);
+  return input;
 }
 
 export async function generateSilence(durationMs: number, output: string): Promise<string> {
