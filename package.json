@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@elysiajs/cors": "^1.4.1",
     "@elysiajs/static": "^1.4.7",
     "@google-cloud/text-to-speech": "latest",
     "@google/genai": "^1.43.0",

@@ -3,6 +3,9 @@ services:
     image: infiniteproject/icecast
     ports:
       - "8000:8000"
+    volumes:
+      - ./config/icecast/icecast.xml:/etc/icecast-custom.xml:ro
+    entrypoint: ["/usr/bin/icecast", "-c", "/etc/icecast-custom.xml"]
     environment:
       ICECAST_SOURCE_PASSWORD: hackme
       ICECAST_ADMIN_PASSWORD: hackme
