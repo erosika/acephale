@@ -4,12 +4,19 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Acephale Radio</title>
-  <link rel="stylesheet" href="style.css?v=4">
+  <link rel="stylesheet" href="style.css?v=6">
 </head>
 <body>
+  <canvas id="ascii-viz"></canvas>
   <header>
     <h1>ACEPHALE RADIO</h1>
     <p class="subtitle">headless transmission</p>
+    <div class="theme-picker" id="theme-picker">
+      <button class="theme-dot active" data-theme="midnight" title="Midnight"></button>
+      <button class="theme-dot" data-theme="phosphor" title="Phosphor"></button>
+      <button class="theme-dot" data-theme="void" title="Void"></button>
+      <button class="theme-dot" data-theme="sakura" title="Sakura"></button>
+    </div>
   </header>
 
   <main>
@@ -129,6 +136,15 @@
     let audioCtx = null;
     let staticSource = null;
     let staticGain = null;
+
+    // Web Audio bus (for visualizer)
+    let audioBus = null;       // GainNode -- all streams merge here
+    let analyser = null;       // AnalyserNode tapped off audioBus
+    let freqData = null;       // Uint8Array for frequency bins
+    const streamGains = {};    // mount -> GainNode (replaces audio.volume)
+
+    // Viz color (updated by theme switcher)
+    let currentVizRgb = [138, 172, 198];
 
     // ========================================================
     // DOM
@@ -274,8 +290,25 @@
       });
     }
 
+    function connectStreamToWebAudio(mount, audioEl) {
+      if (!audioCtx || !audioBus || streamGains[mount]) return;
+      try {
+        const source = audioCtx.createMediaElementSource(audioEl);
+        const gain = audioCtx.createGain();
+        gain.gain.value = 0;
+        source.connect(gain);
+        gain.connect(audioBus);
+        streamGains[mount] = gain;
+        console.log(`[radio] ${mount} routed through Web Audio bus`);
+      } catch (err) {
+        console.error(`[radio] ${mount} Web Audio connect failed:`, err.message);
+      }
+    }
+
     function startAllStreams() {
       for (const [mount, a] of Object.entries(streams)) {
+        // Route through Web Audio bus before playing
+        connectStreamToWebAudio(mount, a);
         a.play().then(() => {
           console.log(`[radio] ${mount} stream playing`);
         }).catch(err => {
@@ -292,27 +325,33 @@
     function computeStreamVolumes() {
       const master = volume / 100;
       if (!isPowerOn) {
-        for (const a of Object.values(streams)) a.volume = 0;
+        for (const s of STATIONS) {
+          const g = streamGains[s.mount];
+          if (g) g.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.05);
+          else if (streams[s.mount]) streams[s.mount].volume = 0;
+        }
         return;
       }
 
       for (const s of STATIONS) {
-        const a = streams[s.mount];
-        if (!a) continue;
         const dist = Math.abs(tuning - s.pos);
 
         let streamVol;
         if (dist <= LOCK_IN) {
-          // Dead-on: full volume
           streamVol = master;
         } else if (dist <= BLEND_RADIUS) {
-          // Blend zone: linear fade from 1 at lock edge to 0 at blend edge
           const t = (BLEND_RADIUS - dist) / (BLEND_RADIUS - LOCK_IN);
           streamVol = t * master;
         } else {
           streamVol = 0;
         }
-        a.volume = streamVol;
+
+        const g = streamGains[s.mount];
+        if (g) {
+          g.gain.linearRampToValueAtTime(streamVol, audioCtx.currentTime + 0.05);
+        } else if (streams[s.mount]) {
+          streams[s.mount].volume = streamVol;
+        }
       }
     }
 
@@ -324,6 +363,18 @@
       audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       console.log('[radio] AudioContext created, sampleRate:', audioCtx.sampleRate);
 
+      // Audio bus -- all streams merge here, then split to destination + analyser
+      audioBus = audioCtx.createGain();
+      audioBus.gain.value = 1;
+      audioBus.connect(audioCtx.destination);
+
+      analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 256;
+      analyser.smoothingTimeConstant = 0.7;
+      audioBus.connect(analyser);
+      freqData = new Uint8Array(analyser.frequencyBinCount);
+
+      // White noise for static
       const bufferSize = audioCtx.sampleRate * 2;
       const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
       const data = buffer.getChannelData(0);
@@ -339,9 +390,9 @@
       staticGain.gain.value = 0;
 
       staticSource.connect(staticGain);
-      staticGain.connect(audioCtx.destination);
+      staticGain.connect(audioBus);
       staticSource.start();
-      console.log('[radio] static noise engine running');
+      console.log('[radio] static noise engine + analyser running');
     }
 
     function updateStaticGain() {
@@ -741,6 +792,179 @@
     });
 
     // ========================================================
+    // ASCII VISUALIZER (play.core-inspired, audio-reactive)
+    // ========================================================
+    const vizCanvas = document.getElementById('ascii-viz');
+    const vizCtx = vizCanvas.getContext('2d');
+
+    const DENSITY = ' \u00B7:░▒▓█';  // intensity -> character
+    const CELL_W = 10;
+    const CELL_H = 16;
+    let vizCols = 0, vizRows = 0;
+    let vizBuffer = [];    // current intensity [0..1] per cell
+    let vizPrev = [];      // previous frame for decay trail
+    let sparks = [];       // upward-drifting particles
+
+    function smoothstep(edge0, edge1, x) {
+      const t = Math.max(0, Math.min(1, (x - edge0) / (edge1 - edge0)));
+      return t * t * (3 - 2 * t);
+    }
+
+    function initVizSize() {
+      vizCanvas.width = window.innerWidth;
+      vizCanvas.height = window.innerHeight;
+      vizCols = Math.floor(vizCanvas.width / CELL_W);
+      vizRows = Math.floor(vizCanvas.height / CELL_H);
+      const len = vizCols * vizRows;
+      vizBuffer = new Float32Array(len);
+      vizPrev = new Float32Array(len);
+    }
+
+    window.addEventListener('resize', initVizSize);
+    initVizSize();
+
+    function renderViz(time) {
+      requestAnimationFrame(renderViz);
+      if (!analyser || !freqData || !isPowerOn) {
+        vizCtx.clearRect(0, 0, vizCanvas.width, vizCanvas.height);
+        return;
+      }
+
+      analyser.getByteFrequencyData(freqData);
+      const binCount = freqData.length;
+
+      // Global energy (0..1) for spark spawning
+      let energy = 0;
+      for (let i = 0; i < binCount; i++) energy += freqData[i];
+      energy = energy / (binCount * 255);
+
+      const t = time * 0.001;
+
+      // Decay previous frame
+      for (let i = 0; i < vizBuffer.length; i++) {
+        vizPrev[i] = vizBuffer[i];
+        vizBuffer[i] = 0;
+      }
+
+      // Organic wave field: frequency bins drive horizontal slices with sine interference
+      for (let row = 0; row < vizRows; row++) {
+        const rowT = row / vizRows;
+        // Map row to frequency bin range (low freq at bottom, high at top)
+        const binIdx = Math.floor((1 - rowT) * (binCount - 1));
+        const amplitude = freqData[binIdx] / 255;
+
+        for (let col = 0; col < vizCols; col++) {
+          const colT = col / vizCols;
+
+          // Two sine waves with different frequencies, modulated by audio
+          const wave1 = Math.sin(colT * 6.0 + t * 0.8 + rowT * 3.0) * 0.5 + 0.5;
+          const wave2 = Math.sin(colT * 10.0 - t * 1.2 + rowT * 5.0) * 0.5 + 0.5;
+          const wave = wave1 * 0.6 + wave2 * 0.4;
+
+          // Combine with frequency amplitude
+          let intensity = wave * amplitude * 1.4;
+
+          // Edge fade (vignette)
+          const edgeX = smoothstep(0, 0.15, colT) * smoothstep(1, 0.85, colT);
+          const edgeY = smoothstep(0, 0.1, rowT) * smoothstep(1, 0.9, rowT);
+          intensity *= edgeX * edgeY;
+
+          // Blend with decayed previous frame for trails
+          const idx = row * vizCols + col;
+          const trailed = vizPrev[idx] * 0.91;
+          vizBuffer[idx] = Math.max(intensity, trailed);
+        }
+      }
+
+      // Spark particles -- spawn on high energy
+      if (energy > 0.15) {
+        const spawnCount = Math.floor(energy * 3);
+        for (let i = 0; i < spawnCount; i++) {
+          sparks.push({
+            x: Math.random() * vizCols,
+            y: vizRows * (0.6 + Math.random() * 0.4),
+            vx: (Math.random() - 0.5) * 0.3,
+            vy: -0.3 - Math.random() * 0.8,
+            life: 1.0,
+          });
+        }
+      }
+
+      // Update + render sparks into buffer
+      for (let i = sparks.length - 1; i >= 0; i--) {
+        const s = sparks[i];
+        s.x += s.vx;
+        s.y += s.vy;
+        s.life -= 0.015;
+        if (s.life <= 0 || s.y < 0 || s.x < 0 || s.x >= vizCols) {
+          sparks.splice(i, 1);
+          continue;
+        }
+        const col = Math.floor(s.x);
+        const row = Math.floor(s.y);
+        if (row >= 0 && row < vizRows && col >= 0 && col < vizCols) {
+          const idx = row * vizCols + col;
+          vizBuffer[idx] = Math.max(vizBuffer[idx], s.life * 0.8);
+        }
+      }
+      if (sparks.length > 200) sparks.length = 200;
+
+      // Render to canvas
+      vizCtx.clearRect(0, 0, vizCanvas.width, vizCanvas.height);
+      vizCtx.font = `${CELL_H - 2}px 'Departure Mono', ui-monospace, monospace`;
+      vizCtx.textBaseline = 'top';
+
+      for (let row = 0; row < vizRows; row++) {
+        let rowStr = '';
+        for (let col = 0; col < vizCols; col++) {
+          const val = Math.max(0, Math.min(1, vizBuffer[row * vizCols + col]));
+          const charIdx = Math.floor(smoothstep(0, 1, val) * (DENSITY.length - 1));
+          rowStr += DENSITY[charIdx];
+        }
+        // Color: accent-dim with intensity-based alpha
+        let rowEnergy = 0;
+        for (let c = row * vizCols, end = c + vizCols; c < end; c++) rowEnergy += vizBuffer[c];
+        rowEnergy /= vizCols;
+        const alpha = Math.max(0.15, Math.min(1, rowEnergy * 3));
+        vizCtx.fillStyle = `rgba(${currentVizRgb[0]}, ${currentVizRgb[1]}, ${currentVizRgb[2]}, ${alpha.toFixed(3)})`;
+        vizCtx.fillText(rowStr, 0, row * CELL_H);
+      }
+    }
+
+    // ========================================================
+    // THEME SWITCHER
+    // ========================================================
+    const THEME_VIZ_COLORS = {
+      midnight:  [138, 172, 198],
+      phosphor:  [64, 192, 64],
+      void:      [144, 144, 160],
+      sakura:    [224, 144, 192],
+    };
+
+    function setTheme(name) {
+      const html = document.documentElement;
+      if (name === 'midnight') {
+        html.removeAttribute('data-theme');
+      } else {
+        html.setAttribute('data-theme', name);
+      }
+      currentVizRgb = THEME_VIZ_COLORS[name] || THEME_VIZ_COLORS.midnight;
+      document.querySelectorAll('.theme-dot').forEach(dot => {
+        dot.classList.toggle('active', dot.dataset.theme === name);
+      });
+      try { localStorage.setItem('acephale-theme', name); } catch {}
+    }
+
+    // Restore saved theme
+    const savedTheme = localStorage.getItem('acephale-theme') || 'midnight';
+    setTheme(savedTheme);
+
+    document.getElementById('theme-picker').addEventListener('click', (e) => {
+      const dot = e.target.closest('.theme-dot');
+      if (dot) setTheme(dot.dataset.theme);
+    });
+
+    // ========================================================
     // BOOT
     // ========================================================
     initStreams();
@@ -751,7 +975,8 @@
     displayMode = '__force__';
     updateTuningFrame();
     unmuteOverlay.classList.remove('hidden');
-    console.log('[radio] boot complete');
+    requestAnimationFrame(renderViz);
+    console.log('[radio] boot complete (+ ascii viz)');
   </script>
 </body>
 </html>
